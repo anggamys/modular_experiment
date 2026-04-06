@@ -243,21 +243,32 @@ class Trainer:
         model.to(self.device)
 
         # Create data loaders
-        batch_size = self.config["training"]["batch_size"]
+        try:
+            batch_size = int(self.config["training"]["batch_size"])
+            learning_rate = float(self.config["training"]["learning_rate"])
+            weight_decay = float(self.config["training"]["weight_decay"])
+            num_epochs = int(self.config["training"]["num_epochs"])
+            warmup_steps = int(self.config["training"]["warmup_steps"])
+        except (TypeError, ValueError) as error:
+            self.utils.log(
+                "Trainer",
+                LogType.ERROR,
+                f"Invalid numeric value in training config: {error}",
+            )
+            raise SystemExit(1)
+
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
         # Optimizer
         optimizer = AdamW(
             model.parameters(),
-            lr=self.config["training"]["learning_rate"],
-            weight_decay=self.config["training"]["weight_decay"],
+            lr=learning_rate,
+            weight_decay=weight_decay,
         )
 
         # Learning rate scheduler
-        num_epochs = self.config["training"]["num_epochs"]
         total_steps = len(train_loader) * num_epochs
-        warmup_steps = self.config["training"]["warmup_steps"]
 
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
