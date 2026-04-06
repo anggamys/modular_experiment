@@ -8,34 +8,85 @@ from zoneinfo import ZoneInfo
 
 class Utils:
     def __init__(self):
-        pass
+        self._log_file_path = None
 
-    def log(self, module: str, log_type: LogType, message: str):
-        timestamp = datetime.now(ZoneInfo("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S")
+    def dateTimeNow(self) -> str:
+        try:
+            return datetime.now(ZoneInfo("Asia/Jakarta")).strftime("%Y-%m-%d %H:%M:%S")
 
-        print(f"[{timestamp}] [{module}] {log_type.value}: {message}")
+        except Exception:
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def create_dir(self, path: str):
-        if os.path.exists(path):
-            self.log("Utils", LogType.INFO, f"Directory already exists: {path}")
-            return
+    def _format_log(self, module: str, log_type: LogType, message: str) -> str:
+        timestamp = self.dateTimeNow()
+        return f"[{timestamp}] [{module}] [{log_type.value}]: {message}"
 
-        if not os.path.exists(path):
-            os.makedirs(path)
+    def log(self, module: str, log_type: LogType, message: str) -> None:
+        try:
+            log_line = self._format_log(module, log_type, message)
 
-        self.log("Utils", LogType.INFO, f"Directory created: {path}")
-        return path
+            print(log_line)
+
+            if self._log_file_path:
+                with open(self._log_file_path, "a", encoding="utf-8") as f:
+                    f.write(log_line + "\n")
+
+        except Exception as e:
+            print(f"[LOGGER ERROR] Failed to write log: {e}")
+
+    def create_dir(self, path: str) -> str:
+        try:
+            if os.path.exists(path):
+                self.log("Utils", LogType.INFO, f"Directory already exists: {path}")
+                return path
+
+            os.makedirs(path, exist_ok=True)
+            self.log("Utils", LogType.INFO, f"Directory created: {path}")
+
+            return path
+        except Exception as e:
+            self.log(
+                "Utils", LogType.ERROR, f"Failed to create directory '{path}': {e}"
+            )
+
+            raise
 
     def argument_parser(
         self,
         description: str,
         arguments: list,
     ):
-        parser = argparse.ArgumentParser(description=description)
+        try:
+            parser = argparse.ArgumentParser(description=description)
 
-        for arg in arguments:
-            parser.add_argument(
-                arg["name"], help=arg["help"], required=arg.get("required", False)
-            )
+            for arg in arguments:
+                parser.add_argument(
+                    arg["name"],
+                    help=arg["help"],
+                    required=arg.get("required", False),
+                )
 
-        return parser.parse_args()
+            return parser.parse_args()
+
+        except SystemExit:
+            raise
+
+        except Exception as e:
+            self.log("Utils", LogType.ERROR, f"Argument parsing failed: {e}")
+            raise
+
+    def log2file(self, log_dir: str = "logs", filename: str | None = None):
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+
+            if filename is None:
+                dt = self.dateTimeNow().replace(":", "-").replace(" ", "_")
+                filename = f"run_{dt}.log"
+
+            self._log_file_path = os.path.join(log_dir, filename)
+            self.log("Utils", LogType.INFO, f"Log file enabled: {self._log_file_path}")
+
+            return self._log_file_path
+        except Exception as e:
+            self.log("Utils", LogType.ERROR, f"Failed to enable log file: {e}")
+            raise

@@ -54,6 +54,8 @@ def main():
         tokenizer = hugging_face.tokenizer(model_path)
         model = hugging_face.model(model_path)
 
+        hugging_face.model_info(model_path)
+
         sample_text = "Contoh kalimat untuk tokenisasi."
         token_ids = tokenizer.encode(sample_text, add_special_tokens=False)
         tokens = tokenizer.convert_ids_to_tokens(token_ids)

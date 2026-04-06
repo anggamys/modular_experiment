@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional
 
 from huggingface_hub import snapshot_download
+import torch.nn as nn
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -18,14 +19,25 @@ class HuggingFace:
 
     def _resolve_local_dir(self, model_name: str, local_dir: Optional[str]) -> str:
         if local_dir is None:
-            local_dir = str(Path("./hugging_face") / model_name)
+            local_dir = str(Path("./hugging_face").joinpath(*model_name.split("/")))
             self.utils.log(
                 "HuggingFace",
                 LogType.INFO,
-                f"No local directory provided. Using default: {local_dir}",
+                f"Using default local directory: {local_dir}",
             )
 
-        return local_dir
+            return str(Path(local_dir).expanduser())
+
+        local_dir = local_dir.strip()
+        if local_dir == "":
+            local_dir = str(Path("./hugging_face").joinpath(*model_name.split("/")))
+            self.utils.log(
+                "HuggingFace",
+                LogType.INFO,
+                f"--local_dir is empty. Using default: {local_dir}",
+            )
+
+        return str(Path(local_dir).expanduser())
 
     def huggingface_download(
         self, model_name: str, local_dir: Optional[str] = None
@@ -39,6 +51,7 @@ class HuggingFace:
                 LogType.INFO,
                 f"Model '{model_name}' already exists. Using local folder: {local_dir}",
             )
+
             return local_dir
 
         self.utils.create_dir(local_dir)
@@ -61,6 +74,26 @@ class HuggingFace:
         )
 
         return local_dir
+
+    def model_info(self, model_path: str):
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            model = AutoModel.from_pretrained(model_path)
+
+            self.utils.log(
+                "HuggingFace",
+                LogType.INFO,
+                f"Model info for '{model_path}': Tokenizer vocab size: {tokenizer.vocab_size}, Model hidden size: {model.config.hidden_size}",
+            )
+
+        except Exception as error:
+            self.utils.log(
+                "HuggingFace",
+                LogType.ERROR,
+                f"Failed to load model info from '{model_path}': {error}",
+            )
+
+            exit(1)
 
     def tokenizer(self, model_path: str) -> PreTrainedTokenizerBase:
         if model_path is None:
@@ -120,7 +153,25 @@ class HuggingFace:
 
                 return None
 
-            return embeddings.weight[token_id].tolist()
+            if not isinstance(embeddings, nn.Embedding):
+                self.utils.log(
+                    "HuggingFace",
+                    LogType.ERROR,
+                    f"Unsupported embedding layer type: {type(embeddings)}",
+                )
+
+                return None
+
+            if token_id < 0 or token_id >= embeddings.num_embeddings:
+                self.utils.log(
+                    "HuggingFace",
+                    LogType.ERROR,
+                    f"Token ID {token_id} is out of range for embedding size {embeddings.num_embeddings}.",
+                )
+
+                return None
+
+            return embeddings.weight[token_id].detach().cpu().tolist()
         except Exception as error:
             self.utils.log(
                 "HuggingFace",
@@ -128,4 +179,4 @@ class HuggingFace:
                 f"Failed to get embedding vector for token ID {token_id}: {error}",
             )
 
-            return None
+            exit(1)
