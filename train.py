@@ -1,10 +1,17 @@
+import csv
 import json
+import yaml
+import torch
+import numpy as np
+from tqdm import tqdm
 from pathlib import Path
 from typing import Tuple
+from transformers import get_linear_schedule_with_warmup
 
-import numpy as np
-import torch
-import yaml
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -12,69 +19,19 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from torch.optim import AdamW
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
-from transformers import get_linear_schedule_with_warmup
 
-from data import Data
+from data import Data, TokenDataset
 from hugging_face import HuggingFace
 from model import IndoBERTForTokenClassification
 from type import LogType
 from utils import Utils
 
 
-class TokenDataset(Dataset):
-    """Dataset class for token classification tasks."""
-
-    def __init__(
-        self,
-        tokens: list,
-        labels: list,
-        label2id: dict,
-        tokenizer,
-        max_length: int = 128,
-    ):
-        self.tokens = tokens
-        self.labels = labels
-        self.label2id = label2id
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-
-    def __len__(self):
-        return len(self.tokens)
-
-    def __getitem__(self, idx):
-        token = str(self.tokens[idx])
-        label = self.labels[idx]
-        label_id = self.label2id[label]
-
-        # Tokenize the token
-        encoding = self.tokenizer(
-            token,
-            max_length=self.max_length,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
-        )
-
-        return {
-            "input_ids": encoding["input_ids"].squeeze(),
-            "attention_mask": encoding["attention_mask"].squeeze(),
-            "token_type_ids": encoding.get(
-                "token_type_ids", torch.zeros(self.max_length)
-            ).squeeze(),
-            "labels": torch.tensor(label_id, dtype=torch.long),
-        }
-
-
 class Trainer:
-    """Trainer class for model training and evaluation."""
-
     def __init__(self, config_path: str):
-        self.utils = Utils()
         self.data = Data()
+        self.token_dataset = TokenDataset
+        self.utils = Utils()
         self.hugging_face = HuggingFace()
 
         # Load configuration
@@ -107,7 +64,6 @@ class Trainer:
         )
 
     def _set_seed(self, seed: int):
-        """Set random seeds for reproducibility."""
         torch.manual_seed(seed)
         np.random.seed(seed)
         if torch.cuda.is_available():
@@ -116,15 +72,6 @@ class Trainer:
     def prepare_data(
         self, csv_path: str
     ) -> Tuple[TokenDataset, TokenDataset, TokenDataset, dict, dict]:
-        """
-        Prepare training, validation, and test datasets.
-
-        Args:
-            csv_path: Path to the CSV file containing tokens and labels
-
-        Returns:
-            Tuple of (train_dataset, val_dataset, test_dataset, label2id, id2label)
-        """
         self.utils.log("Trainer", LogType.INFO, f"Loading data from {csv_path}")
 
         # Load data
@@ -150,6 +97,7 @@ class Trainer:
         model_path = self.hugging_face.huggingface_download(
             self.config["model"]["model_name"]
         )
+
         tokenizer = self.hugging_face.tokenizer(model_path)
 
         # Split data: train-val-test
@@ -214,16 +162,6 @@ class Trainer:
         id2label: dict,
         model_path: str,
     ):
-        """
-        Train the model.
-
-        Args:
-            train_dataset: Training dataset
-            val_dataset: Validation dataset
-            label2id: Label to ID mapping
-            id2label: ID to label mapping
-            model_path: Path to pretrained model
-        """
         self.utils.log("Trainer", LogType.INFO, "Starting training...")
 
         # Update config with actual number of labels
@@ -355,21 +293,40 @@ class Trainer:
 
                 break
 
-        # Save training results
+        # Save training results (JSON)
         results_path = self.checkpoint_dir / "training_results.json"
         with open(results_path, "w") as f:
             json.dump(training_results, f, indent=2)
 
+        # Save training results (CSV)
+
+        csv_path = self.checkpoint_dir / "training_results.csv"
+        fieldnames = ["epoch", "train_loss", "val_loss", "val_accuracy", "val_f1"]
+
+        with open(csv_path, "w", newline="") as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+
+            for i in range(len(training_results["epochs"])):
+                row = {
+                    "epoch": training_results["epochs"][i],
+                    "train_loss": training_results["train_loss"][i],
+                    "val_loss": training_results["val_loss"][i],
+                    "val_accuracy": training_results["val_accuracy"][i],
+                    "val_f1": training_results["val_f1"][i],
+                }
+
+                writer.writerow(row)
+
         self.utils.log(
             "Trainer",
             LogType.INFO,
-            f"Training results saved to {results_path}",
+            f"Training results saved to {results_path} and {csv_path}",
         )
 
         return model, label2id, id2label, training_results
 
     def _train_epoch(self, model, train_loader, optimizer, scheduler):
-        """Train for one epoch."""
         model.train()
         total_loss = 0
 
@@ -395,13 +352,13 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(), self.config["training"]["max_grad_norm"]
             )
+
             optimizer.step()
             scheduler.step()
 
         return total_loss / len(train_loader)
 
     def _validate_epoch(self, model, val_loader, id2label):
-        """Validate for one epoch."""
         model.eval()
         total_loss = 0
         all_predictions = []
@@ -442,17 +399,6 @@ class Trainer:
         return total_loss / len(val_loader), metrics
 
     def evaluate(self, model, test_dataset, id2label):
-        """
-        Evaluate model on test set.
-
-        Args:
-            model: Trained model
-            test_dataset: Test dataset
-            id2label: ID to label mapping
-
-        Returns:
-            dict: Evaluation metrics
-        """
         self.utils.log("Trainer", LogType.INFO, "Evaluating on test set...")
 
         model.eval()
@@ -489,9 +435,11 @@ class Trainer:
         precision = precision_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
+
         recall = recall_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
+
         f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
 
         ordered_label_names = []
@@ -499,12 +447,14 @@ class Trainer:
             label_name = id2label.get(i, id2label.get(str(i)))
             if label_name is None:
                 label_name = str(i)
+
             ordered_label_names.append(label_name)
 
         # Classification report
         class_report = classification_report(
             all_labels,
             all_predictions,
+            labels=list(range(len(ordered_label_names))),
             target_names=ordered_label_names,
             zero_division=0,
         )
@@ -538,23 +488,25 @@ class Trainer:
 
 
 def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Train IndoBERT for POS tagging")
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="config.yml",
-        help="Path to config file",
+    utils = Utils()
+    args = utils.argument_parser(
+        description="IndoBERT POS Tagging Pipeline",
+        arguments=[
+            {
+                "name": "--config",
+                "help": "Path to config file",
+                "required": False,
+                "default": "config.yml",
+                "type": str,
+            },
+            {
+                "name": "--dataset",
+                "help": "Path to dataset CSV file (required for explore mode)",
+                "required": False,
+                "type": str,
+            },
+        ],
     )
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        required=True,
-        help="Path to dataset CSV file",
-    )
-
-    args = parser.parse_args()
 
     # Initialize trainer
     trainer = Trainer(args.config)

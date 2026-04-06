@@ -62,11 +62,12 @@ class Utils:
             parser = argparse.ArgumentParser(description=description)
 
             for arg in arguments:
-                parser.add_argument(
-                    arg["name"],
-                    help=arg["help"],
-                    required=arg.get("required", False),
-                )
+                arg_copy = dict(arg)
+                name = arg_copy.pop("name")
+                help_text = arg_copy.pop("help", None)
+                if help_text is not None:
+                    arg_copy["help"] = help_text
+                parser.add_argument(name, **arg_copy)
 
             return parser.parse_args()
 

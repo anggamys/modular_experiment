@@ -1,20 +1,10 @@
-"""
-Script untuk visualisasi training results dan evaluation metrics.
-"""
-
-import argparse
 import json
-from pathlib import Path
 import yaml
+from utils import Utils
+from pathlib import Path
 
 
 def plot_training_curves(results_path: str):
-    """
-    Plot training curves dari training results.
-
-    Args:
-        results_path: Path ke training_results.json
-    """
     with open(results_path, "r") as f:
         results = json.load(f)
 
@@ -78,12 +68,6 @@ def plot_training_curves(results_path: str):
 
 
 def print_evaluation_report(eval_path: str):
-    """
-    Print evaluation report dari evaluation results.
-
-    Args:
-        eval_path: Path ke evaluation_results.json
-    """
     with open(eval_path, "r") as f:
         results = json.load(f)
 
@@ -100,13 +84,6 @@ def print_evaluation_report(eval_path: str):
 
 
 def print_config(config_path: str):
-    """
-    Print training configuration.
-
-    Args:
-        config_path: Path ke config.yml
-    """
-
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
@@ -116,12 +93,14 @@ def print_config(config_path: str):
 
     print("Model Configuration:")
     model = config.get("model", {})
+
     print(f"  Model Name: {model.get('model_name')}")
     print(f"  Hidden Size: {model.get('hidden_size')}")
     print(f"  Freeze BERT: {model.get('freeze_bert')}")
 
     print("\nTraining Configuration:")
     training = config.get("training", {})
+
     print(f"  Batch Size: {training.get('batch_size')}")
     print(f"  Learning Rate: {training.get('learning_rate')}")
     print(f"  Num Epochs: {training.get('num_epochs')}")
@@ -130,6 +109,7 @@ def print_config(config_path: str):
 
     print("\nData Configuration:")
     data = config.get("data", {})
+
     print(f"  Test Size: {data.get('test_size')}")
     print(f"  Validation Size: {data.get('validation_size')}")
     print(f"  Max Length: {data.get('max_length')}")
@@ -138,43 +118,44 @@ def print_config(config_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Visualisasi training dan evaluation results"
+    utils = Utils()
+    args = utils.argument_parser(
+        description="Visualisasi training dan evaluation results",
+        arguments=[
+            {
+                "name": "--checkpoint_dir",
+                "help": "Path to checkpoint directory",
+                "type": str,
+                "default": "./checkpoints",
+                "required": False,
+            },
+            {
+                "name": "--config",
+                "help": "Path to config file",
+                "type": str,
+                "default": "./config.yml",
+                "required": False,
+            },
+            {
+                "name": "--training",
+                "help": "Show training results",
+                "action": "store_true",
+                "required": False,
+            },
+            {
+                "name": "--evaluation",
+                "help": "Show evaluation results",
+                "action": "store_true",
+                "required": False,
+            },
+            {
+                "name": "--all",
+                "help": "Show all results",
+                "action": "store_true",
+                "required": False,
+            },
+        ],
     )
-
-    parser.add_argument(
-        "--checkpoint_dir",
-        type=str,
-        default="./checkpoints",
-        help="Path to checkpoint directory",
-    )
-
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="./config.yml",
-        help="Path to config file",
-    )
-
-    parser.add_argument(
-        "--training",
-        action="store_true",
-        help="Show training results",
-    )
-
-    parser.add_argument(
-        "--evaluation",
-        action="store_true",
-        help="Show evaluation results",
-    )
-
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Show all results",
-    )
-
-    args = parser.parse_args()
 
     checkpoint_dir = Path(args.checkpoint_dir)
 
@@ -190,6 +171,7 @@ def main():
         training_results = checkpoint_dir / "training_results.json"
         if training_results.exists():
             plot_training_curves(str(training_results))
+
         else:
             print("training_results.json not found!")
 
@@ -197,11 +179,11 @@ def main():
         eval_results = checkpoint_dir / "evaluation_results.json"
         if eval_results.exists():
             print_evaluation_report(str(eval_results))
+
         else:
             print("evaluation_results.json not found!")
 
     if not (args.all or args.training or args.evaluation):
-        # Default: show all
         training_results = checkpoint_dir / "training_results.json"
         eval_results = checkpoint_dir / "evaluation_results.json"
 

@@ -1,6 +1,8 @@
 import os
 
+import torch
 import pandas as pd
+from torch.utils.data import Dataset
 
 from type import LogType
 from utils import Utils
@@ -35,3 +37,45 @@ class Data:
         except Exception as e:
             self.utils.log("Data", LogType.ERROR, f"Failed to load CSV: {e}")
             exit(1)
+
+
+class TokenDataset(Dataset):
+    def __init__(
+        self,
+        tokens: list,
+        labels: list,
+        label2id: dict,
+        tokenizer,
+        max_length: int = 128,
+    ):
+        self.tokens = tokens
+        self.labels = labels
+        self.label2id = label2id
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self):
+        return len(self.tokens)
+
+    def __getitem__(self, idx):
+        token = str(self.tokens[idx])
+        label = self.labels[idx]
+        label_id = self.label2id[label]
+
+        # Tokenize the token
+        encoding = self.tokenizer(
+            token,
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+
+        return {
+            "input_ids": encoding["input_ids"].squeeze(),
+            "attention_mask": encoding["attention_mask"].squeeze(),
+            "token_type_ids": encoding.get(
+                "token_type_ids", torch.zeros(self.max_length)
+            ).squeeze(),
+            "labels": torch.tensor(label_id, dtype=torch.long),
+        }

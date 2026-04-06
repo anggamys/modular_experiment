@@ -1,12 +1,10 @@
-import argparse
-
 from data import Data
-from hugging_face import HuggingFace
-from type import LogType
 from utils import Utils
+from type import LogType
+from hugging_face import HuggingFace
 
 
-def test_embedding(utils, data, hugging_face, model_name):
+def test_embedding(utils, hugging_face, model_name):
     """Test embedding extraction from model."""
     utils.log("Main", LogType.INFO, "Running embedding test...")
 
@@ -48,6 +46,7 @@ def test_embedding(utils, data, hugging_face, model_name):
 
     except SystemExit:
         pass
+
     except Exception as e:
         utils.log("Main", LogType.ERROR, f"Embedding test failed: {e}")
         raise
@@ -85,69 +84,59 @@ def explore_data(utils, data, dataset_file):
         utils.log(
             "Main",
             LogType.INFO,
-            f"Sample data (first 5 rows):\n{df.head()}",
+            f"Sample data (first 5 rows): {list(zip(*df.sample(n=5).values))}",
         )
 
         utils.log("Main", LogType.INFO, "Data exploration completed!")
 
     except SystemExit:
         pass
+
     except Exception as e:
         utils.log("Main", LogType.ERROR, f"Data exploration failed: {e}")
         raise
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="IndoBERT POS Tagging Pipeline",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Explore dataset
-  python main.py --mode explore --dataset_file data.csv
 
-  # Test embedding extraction
-  python main.py --mode embed --model_name indolem/indobert-base-p1
-
-  # Start training
-  python train.py --dataset data.csv --config config.yml
-        """,
-    )
-
-    parser.add_argument(
-        "--mode",
-        type=str,
-        choices=["explore", "embed"],
-        default="explore",
-        help="Mode to run: explore (data exploration) or embed (test embeddings)",
-    )
-
-    parser.add_argument(
-        "--dataset_file",
-        type=str,
-        help="Path to dataset CSV file (required for explore mode)",
-    )
-
-    parser.add_argument(
-        "--model_name",
-        type=str,
-        default="indolem/indobert-base-p1",
-        help="Model name from HuggingFace (default: indolem/indobert-base-p1)",
-    )
-
-    parser.add_argument(
-        "--log_file",
-        action="store_true",
-        help="Enable logging to file",
-    )
-
-    args = parser.parse_args()
-
-    utils = Utils()
     data = Data()
+    utils = Utils()
     hugging_face = HuggingFace()
 
-    if args.log_file:
+    args = utils.argument_parser(
+        description="IndoBERT POS Tagging Pipeline",
+        arguments=[
+            {
+                "name": "--mode",
+                "help": "Mode to run: explore (data exploration) or embed (test embeddings)",
+                "required": False,
+                "choices": ["explore", "embed"],
+                "default": "explore",
+                "type": str,
+            },
+            {
+                "name": "--dataset_file",
+                "help": "Path to dataset CSV file (required for explore mode)",
+                "required": False,
+                "type": str,
+            },
+            {
+                "name": "--model_name",
+                "help": "Model name from HuggingFace (default: indobenchmark/indobert-base-p1)",
+                "required": False,
+                "default": "indobenchmark/indobert-base-p1",
+                "type": str,
+            },
+            {
+                "name": "--log_file",
+                "help": "Enable logging to file",
+                "required": False,
+                "action": "store_true",
+            },
+        ],
+    )
+
+    if getattr(args, "log_file", False):
         utils.log2file()
 
     utils.log("Main", LogType.INFO, f"Starting in {args.mode} mode")
@@ -155,14 +144,16 @@ Examples:
     try:
         if args.mode == "explore":
             if not args.dataset_file:
-                parser.error("--dataset_file is required for explore mode")
+                raise SystemExit("--dataset_file is required for explore mode")
+
             explore_data(utils, data, args.dataset_file)
 
         elif args.mode == "embed":
-            test_embedding(utils, data, hugging_face, args.model_name)
+            test_embedding(utils, hugging_face, args.model_name)
 
     except SystemExit:
         pass
+
     except Exception as e:
         utils.log("Main", LogType.ERROR, f"Unexpected error: {e}")
 

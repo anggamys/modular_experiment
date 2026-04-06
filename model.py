@@ -6,12 +6,8 @@ from type import LogType
 from utils import Utils
 
 
+# Architecture: IndoBERT → Linear → Softmax
 class IndoBERTForTokenClassification(nn.Module):
-    """
-    IndoBERT model for single token POS tagging.
-    Architecture: BERT → Linear → Softmax
-    """
-
     def __init__(self, model: PreTrainedModel, num_labels: int, hidden_size: int = 768):
         super().__init__()
         self.utils = Utils()
@@ -41,18 +37,6 @@ class IndoBERTForTokenClassification(nn.Module):
         token_type_ids=None,
         labels=None,
     ):
-        """
-        Forward pass for token classification.
-
-        Args:
-            input_ids: Token IDs from tokenizer
-            attention_mask: Mask for padding tokens
-            token_type_ids: Segment IDs (usually not needed for single token)
-            labels: Ground truth labels
-
-        Returns:
-            dict: Contains logits and optional loss
-        """
         # Get BERT output
         bert_output = self.bert(
             input_ids=input_ids,
@@ -89,30 +73,15 @@ class IndoBERTForTokenClassification(nn.Module):
         return outputs
 
     def get_embedding_features(self, input_ids, attention_mask=None):
-        """
-        Extract embedding features from the model.
-
-        Args:
-            input_ids: Token IDs
-            attention_mask: Attention mask
-
-        Returns:
-            torch.Tensor: Embedding features (batch_size, hidden_size)
-        """
         bert_output = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
             return_dict=True,
         )
+
         return bert_output.last_hidden_state[:, 0, :]  # [CLS] token
 
     def freeze_bert_encoder(self, freeze: bool = True):
-        """
-        Freeze or unfreeze BERT encoder parameters.
-
-        Args:
-            freeze: Whether to freeze BERT parameters
-        """
         for param in self.bert.parameters():
             param.requires_grad = not freeze
 
@@ -124,5 +93,44 @@ class IndoBERTForTokenClassification(nn.Module):
         )
 
     def unfreeze_bert_encoder(self):
-        """Unfreeze BERT encoder for full fine-tuning."""
         self.freeze_bert_encoder(False)
+
+
+# Architecture: IndoBERT → Linear → CRF
+class IndoBERTForTokenClassificationWithCRF(IndoBERTForTokenClassification):
+    def __init__(self, model: PreTrainedModel, num_labels: int, hidden_size: int = 768):
+        super().__init__(model, num_labels, hidden_size)
+
+
+# Architecture: IndoBERT → BiLSTM → Softmax
+class IndoBERTForTokenClassificationWithBiLSTM(nn.Module):
+    def __init__(self, model: PreTrainedModel, num_labels: int, hidden_size: int = 768):
+        super().__init__()
+        self.utils = Utils()
+        self.bert = model
+        self.num_labels = num_labels
+        self.hidden_size = hidden_size
+
+        # BiLSTM layer
+        self.bilstm = nn.LSTM(
+            input_size=hidden_size,
+            hidden_size=hidden_size // 2,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True,
+        )
+
+        # Dropout layer
+        self.dropout = nn.Dropout(0.1)
+
+        # Linear layer for classification
+        self.classifier = nn.Linear(hidden_size, num_labels)
+
+        # Loss function
+        self.loss_fn = CrossEntropyLoss()
+
+        self.utils.log(
+            "IndoBERTForTokenClassificationWithBiLSTM",
+            LogType.INFO,
+            f"Model initialized with num_labels={num_labels}, hidden_size={hidden_size}",
+        )
