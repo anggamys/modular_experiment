@@ -86,6 +86,7 @@ class Trainer:
             if torch.cuda.is_available() and self.config["training"]["device"] == "cuda"
             else "cpu"
         )
+
         self.utils.log(
             "Trainer",
             LogType.INFO,
@@ -186,6 +187,7 @@ class Trainer:
             tokenizer,
             self.config["data"]["max_length"],
         )
+
         val_dataset = TokenDataset(
             val_tokens.tolist(),
             val_labels.tolist(),
@@ -193,6 +195,7 @@ class Trainer:
             tokenizer,
             self.config["data"]["max_length"],
         )
+
         test_dataset = TokenDataset(
             test_tokens.tolist(),
             test_labels.tolist(),
@@ -249,12 +252,14 @@ class Trainer:
             weight_decay = float(self.config["training"]["weight_decay"])
             num_epochs = int(self.config["training"]["num_epochs"])
             warmup_steps = int(self.config["training"]["warmup_steps"])
+
         except (TypeError, ValueError) as error:
             self.utils.log(
                 "Trainer",
                 LogType.ERROR,
                 f"Invalid numeric value in training config: {error}",
             )
+
             raise SystemExit(1)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -347,6 +352,7 @@ class Trainer:
                     LogType.WARNING,
                     f"Early stopping at epoch {epoch + 1}",
                 )
+
                 break
 
         # Save training results
@@ -488,11 +494,18 @@ class Trainer:
         )
         f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
 
+        ordered_label_names = []
+        for i in range(len(id2label)):
+            label_name = id2label.get(i, id2label.get(str(i)))
+            if label_name is None:
+                label_name = str(i)
+            ordered_label_names.append(label_name)
+
         # Classification report
         class_report = classification_report(
             all_labels,
             all_predictions,
-            target_names=[id2label[str(i)] for i in range(len(id2label))],
+            target_names=ordered_label_names,
             zero_division=0,
         )
 
@@ -512,6 +525,7 @@ class Trainer:
                 for k, v in evaluation_results.items()
                 if k != "classification_report"
             }
+
             json.dump(eval_dict, f, indent=2)
 
         self.utils.log(
@@ -562,7 +576,7 @@ def main():
     )
 
     # Evaluate
-    eval_results = trainer.evaluate(model, test_dataset, id2label)
+    trainer.evaluate(model, test_dataset, id2label)
 
     trainer.utils.log(
         "Main",
