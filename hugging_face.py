@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import Optional
 
-from huggingface_hub import snapshot_download
 import torch.nn as nn
+from huggingface_hub import snapshot_download
 from transformers import (
     AutoModel,
     AutoTokenizer,
@@ -33,7 +33,7 @@ class HuggingFace:
             local_dir = str(Path("./hugging_face").joinpath(*model_name.split("/")))
             self.utils.log(
                 "HuggingFace",
-                LogType.INFO,
+                LogType.WARNING,
                 f"--local_dir is empty. Using default: {local_dir}",
             )
 

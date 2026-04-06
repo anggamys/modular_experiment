@@ -1,0 +1,38 @@
+# Training Configuration for IndoBERT POS Tagging
+
+# Model Configuration
+model:
+  model_name: 'indobenchmark/indobert-base-p1' # IndoBERT model from HuggingFace
+  num_labels: null # Will be inferred from data
+  hidden_size: 768
+  freeze_bert: false # Full fine-tuning
+
+# Training Configuration
+training:
+  batch_size: 32
+  num_epochs: 5
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_steps: 500
+  max_grad_norm: 1.0
+  device: 'cuda' # or "cpu"
+
+# Data Configuration
+data:
+  test_size: 0.2
+  validation_size: 0.1
+  random_state: 42
+  max_length: 128 # Max sequence length for tokenizer
+
+# Output Configuration
+output:
+  model_save_dir: './checkpoints'
+  log_dir: './logs'
+  evaluation_steps: 500
+  save_steps: 1000
+
+# Experiment Configuration
+experiment:
+  name: 'indobert_postag_baseline'
+  description: 'IndoBERT fine-tuning for POS tagging with single token'
+  seed: 42

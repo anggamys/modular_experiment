@@ -1,7 +1,7 @@
 import os
 
-
 import pandas as pd
+
 from type import LogType
 from utils import Utils
 

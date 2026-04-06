@@ -1,14 +1,16 @@
-import os
 import argparse
-
-from type import LogType
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from type import LogType
+
 
 class Utils:
+    _log_file_path = None
+
     def __init__(self):
-        self._log_file_path = None
+        pass
 
     def dateTimeNow(self) -> str:
         try:
@@ -27,8 +29,8 @@ class Utils:
 
             print(log_line)
 
-            if self._log_file_path:
-                with open(self._log_file_path, "a", encoding="utf-8") as f:
+            if Utils._log_file_path:
+                with open(Utils._log_file_path, "a", encoding="utf-8") as f:
                     f.write(log_line + "\n")
 
         except Exception as e:
@@ -83,10 +85,10 @@ class Utils:
                 dt = self.dateTimeNow().replace(":", "-").replace(" ", "_")
                 filename = f"run_{dt}.log"
 
-            self._log_file_path = os.path.join(log_dir, filename)
-            self.log("Utils", LogType.INFO, f"Log file enabled: {self._log_file_path}")
+            Utils._log_file_path = os.path.join(log_dir, filename)
+            self.log("Utils", LogType.INFO, f"Log file enabled: {Utils._log_file_path}")
 
-            return self._log_file_path
+            return Utils._log_file_path
         except Exception as e:
             self.log("Utils", LogType.ERROR, f"Failed to enable log file: {e}")
             raise
