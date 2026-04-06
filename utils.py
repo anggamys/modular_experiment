@@ -1,28 +1,27 @@
+import enum
 import os
-from typing import Optional
 
-from huggingface_hub import snapshot_download
+
+class LogType(enum.Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
 
 
 class Utils:
     def __init__(self):
         pass
 
+    def log(self, module: str, log_type: LogType, message: str):
+        print(f"[{module}] {log_type.value}: {message}")
+
     def create_dir(self, path: str):
         if os.path.exists(path):
+            self.log("Utils", LogType.INFO, f"Directory already exists: {path}")
             return
 
         if not os.path.exists(path):
             os.makedirs(path)
-            
+
+        self.log("Utils", LogType.INFO, f"Directory created: {path}")
         return path
-
-    def huggingface_download(self, model_name: str, local_dir: Optional[str] = None):
-        if local_dir is None:
-            local_dir = f"./hugging_face/{model_name}"
-
-        self.create_dir(local_dir)
-
-        snapshot_download(repo_id=model_name, local_dir=local_dir)
-        
-        return local_dir
