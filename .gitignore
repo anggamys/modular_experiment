@@ -1,3 +1,6 @@
-# Python Compiled files
+# Python Compiled
 __pycache__/*
 *.pyc
+
+# Hugging Face
+hugging_face/*
