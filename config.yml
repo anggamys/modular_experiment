@@ -11,7 +11,7 @@ model:
 
 training:
   batch_size: 32
-  num_epochs: 4
+  num_epochs: 12
   learning_rate: 2e-5
   bert_learning_rate: 2e-5
   head_learning_rate: 1e-4
@@ -58,7 +58,7 @@ experiments:
       model_name: indobenchmark/indobert-large-p2
       hidden_size: 1024
     training:
-      num_epochs: 4
+      num_epochs: 10
 
   EXP-02:
     experiment:
@@ -71,7 +71,7 @@ experiments:
       hidden_size: 1024
       mlp_hidden_size: 256
     training:
-      num_epochs: 4
+      num_epochs: 10
 
   EXP-03:
     experiment:
@@ -83,7 +83,7 @@ experiments:
       model_name: cahya/distilbert-base-indonesian
       hidden_size: 768
     training:
-      num_epochs: 4
+      num_epochs: 10
       learning_rate: 3e-5
 
   EXP-04:
@@ -96,7 +96,7 @@ experiments:
       model_name: flax-community/indonesian-roberta-base
       hidden_size: 768
     training:
-      num_epochs: 4
+      num_epochs: 10
 
   EXP-05:
     experiment:
@@ -109,7 +109,7 @@ experiments:
       hidden_size: 1024
       gru_hidden_size: 256
     training:
-      num_epochs: 5
+      num_epochs: 15
 
   EXP-06:
     experiment:
@@ -122,7 +122,7 @@ experiments:
       hidden_size: 1024
       cnn_out_channels: 128
     training:
-      num_epochs: 5
+      num_epochs: 15
 
   EXP-07:
     experiment:
@@ -134,7 +134,7 @@ experiments:
       freeze_bert: true
       cnn_out_channels: 128
     training:
-      num_epochs: 10
+      num_epochs: 20
       learning_rate: 1e-3
 
   EXP-08:
@@ -147,7 +147,7 @@ experiments:
       freeze_bert: true
       lstm_hidden_size: 128
     training:
-      num_epochs: 10
+      num_epochs: 20
       learning_rate: 7.5e-4
 
   EXP-09:
@@ -161,7 +161,7 @@ experiments:
       cnn_out_channels: 128
       lstm_hidden_size: 128
     training:
-      num_epochs: 12
+      num_epochs: 25
       learning_rate: 5e-4
 
   EXP-10:
@@ -175,7 +175,7 @@ experiments:
       hidden_size: 1024
       cnn_out_channels: 128
     training:
-      num_epochs: 6
+      num_epochs: 18
 
   EXP-11:
     experiment:
@@ -188,5 +188,5 @@ experiments:
       hidden_size: 768
       cnn_out_channels: 128
     training:
-      num_epochs: 6
+      num_epochs: 18
       learning_rate: 3e-5
