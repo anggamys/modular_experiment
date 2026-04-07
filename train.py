@@ -54,8 +54,9 @@ class Trainer:
 
         model.to(self.device)
 
-        batch_size = self.config["training"]["batch_size"]
-        num_workers = min(4, len(train_dataset) // batch_size)
+        batch_size = int(self.config["training"]["batch_size"])
+        # Cap workers conservatively to avoid runtime warnings/freezes on limited environments.
+        num_workers = min(2, max(0, len(train_dataset) // max(1, batch_size)))
 
         train_loader = DataLoader(
             train_dataset,

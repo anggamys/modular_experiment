@@ -4,9 +4,28 @@ from data import DataPipeline
 from model import ModelBuilder
 from hugging_face import HuggingFace
 from train import Trainer
+import os
+import warnings
+from huggingface_hub.utils import logging as hf_logging
 
 
 def main():
+    # Keep logs focused on app logs by muting noisy third-party warnings.
+    warnings.filterwarnings(
+        "ignore",
+        message="This DataLoader will create .* worker processes.*",
+        category=UserWarning,
+    )
+
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*GradScaler.*deprecated.*",
+        category=FutureWarning,
+    )
+
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    hf_logging.set_verbosity_error()
+
     utils = Utils()
     args = utils.argument_parser(
         description="IndoBERT POS Tagging Training",
