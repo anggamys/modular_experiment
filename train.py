@@ -20,11 +20,13 @@ from utils import Utils
 
 
 class Trainer:
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, exp_id: str | None = None):
         self.utils = Utils()
 
         with open(config_path, "r") as f:
-            self.config = yaml.safe_load(f)
+            raw_config = yaml.safe_load(f)
+
+        self.config = self._resolve_experiment_config(raw_config, exp_id)
 
         self.device = torch.device(
             "cuda"
@@ -34,7 +36,11 @@ class Trainer:
 
         self._set_seed(self.config["experiment"]["seed"])
 
-        self.checkpoint_dir = Path(self.config["output"]["model_save_dir"])
+        save_dir = Path(self.config["output"]["model_save_dir"])
+        exp_name = self.config["experiment"].get(
+            "code", self.config["experiment"]["name"]
+        )
+        self.checkpoint_dir = save_dir / exp_name
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         self.utils.log(
@@ -43,11 +49,46 @@ class Trainer:
             f"Device: {self.device} | Path: {self.checkpoint_dir}",
         )
 
+    def _resolve_experiment_config(self, raw_config: dict, exp_id: str | None):
+        experiments = raw_config.get("experiments", {})
+        if exp_id is None:
+            exp_id = raw_config.get("experiment", {}).get("default_id")
+
+        if exp_id and exp_id in experiments:
+            selected = experiments[exp_id]
+            merged = {
+                "model": {**raw_config.get("model", {}), **selected.get("model", {})},
+                "training": {
+                    **raw_config.get("training", {}),
+                    **selected.get("training", {}),
+                },
+                "data": {**raw_config.get("data", {}), **selected.get("data", {})},
+                "output": {
+                    **raw_config.get("output", {}),
+                    **selected.get("output", {}),
+                },
+                "experiment": {
+                    **raw_config.get("experiment", {}),
+                    **selected.get("experiment", {}),
+                    "code": exp_id,
+                },
+            }
+            self.utils.log("Trainer", LogType.INFO, f"Selected experiment: {exp_id}")
+            return merged
+
+        return raw_config
+
     def _set_seed(self, seed: int):
         torch.manual_seed(seed)
         np.random.seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+
+    def _move_batch_to_device(self, batch: dict):
+        return {
+            key: value.to(self.device) if torch.is_tensor(value) else value
+            for key, value in batch.items()
+        }
 
     def train(self, model, train_dataset, val_dataset, label2id, id2label):
         self.utils.log("Trainer", LogType.INFO, "Starting training...")
@@ -172,20 +213,12 @@ class Trainer:
         total_loss = 0
 
         for batch in tqdm(train_loader, desc="Training", leave=False):
-            input_ids = batch["input_ids"].to(self.device)
-            attention_mask = batch["attention_mask"].to(self.device)
-            token_type_ids = batch["token_type_ids"].to(self.device)
-            labels = batch["labels"].to(self.device)
+            batch = self._move_batch_to_device(batch)
 
             optimizer.zero_grad()
 
             with torch.autocast(device_type=self.device.type, enabled=amp_enabled):
-                outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    token_type_ids=token_type_ids,
-                    labels=labels,
-                )
+                outputs = model(**batch)
                 loss = outputs["loss"]
 
             total_loss += loss.item()
@@ -211,18 +244,11 @@ class Trainer:
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validating", leave=False):
-                input_ids = batch["input_ids"].to(self.device)
-                attention_mask = batch["attention_mask"].to(self.device)
-                token_type_ids = batch["token_type_ids"].to(self.device)
-                labels = batch["labels"].to(self.device)
+                batch = self._move_batch_to_device(batch)
+                labels = batch["labels"]
 
                 with torch.autocast(device_type=self.device.type, enabled=amp_enabled):
-                    outputs = model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        token_type_ids=token_type_ids,
-                        labels=labels,
-                    )
+                    outputs = model(**batch)
                     loss = outputs["loss"]
 
                 total_loss += loss.item()
@@ -256,17 +282,12 @@ class Trainer:
 
         with torch.no_grad():
             for batch in tqdm(test_loader, desc="Evaluating", leave=False):
-                input_ids = batch["input_ids"].to(self.device)
-                attention_mask = batch["attention_mask"].to(self.device)
-                token_type_ids = batch["token_type_ids"].to(self.device)
-                labels = batch["labels"].to(self.device)
+                batch = self._move_batch_to_device(batch)
+                labels = batch["labels"]
 
                 with torch.autocast(device_type=self.device.type, enabled=amp_enabled):
-                    outputs = model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask,
-                        token_type_ids=token_type_ids,
-                    )
+                    eval_batch = {k: v for k, v in batch.items() if k != "labels"}
+                    outputs = model(**eval_batch)
 
                 logits = outputs["logits"]
                 predictions = torch.argmax(logits, dim=-1)

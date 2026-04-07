@@ -1,28 +1,148 @@
 model:
-  model_name: 'indobenchmark/indobert-base-p1'
-  num_labels: null
+  architecture: bert_linear
+  model_name: indobenchmark/indobert-base-p1
   hidden_size: 768
   freeze_bert: false
+  mlp_hidden_size: 256
+  gru_hidden_size: 256
+  cnn_out_channels: 128
+  char_embedding_dim: 64
+  lstm_hidden_size: 128
 
 training:
   batch_size: 32
-  num_epochs: 1
+  num_epochs: 5
   learning_rate: 2e-5
   weight_decay: 0.01
-  warmup_steps: 500
+  warmup_steps: 200
   max_grad_norm: 1.0
-  device: 'cuda'
+  device: cuda
 
 data:
   test_size: 0.2
   validation_size: 0.1
   random_state: 42
-  max_length: 128
+  max_length: 32
+  char_max_length: 24
+  label_column: label
 
 output:
-  model_save_dir: './checkpoints'
+  model_save_dir: ./checkpoints
 
 experiment:
-  name: 'indobert_postag_baseline'
-  description: 'IndoBERT fine-tuning for POS tagging'
+  default_id: EXP-01
+  name: baseline
+  description: baseline
   seed: 42
+
+experiments:
+  EXP-01:
+    experiment:
+      name: indobert_linear
+      description: IndoBERT -> Linear baseline
+      seed: 42
+    model:
+      architecture: bert_linear
+      model_name: indobenchmark/indobert-base-p1
+
+  EXP-02:
+    experiment:
+      name: indobert_mlp
+      description: IndoBERT -> MLP classifier
+      seed: 42
+    model:
+      architecture: bert_mlp
+      model_name: indobenchmark/indobert-base-p1
+      mlp_hidden_size: 256
+
+  EXP-03:
+    experiment:
+      name: distilbert_linear
+      description: DistilBERT -> Linear classifier
+      seed: 42
+    model:
+      architecture: bert_linear
+      model_name: cahya/distilbert-base-indonesian
+      hidden_size: 768
+
+  EXP-04:
+    experiment:
+      name: indoroberta_linear
+      description: IndoRoBERTa -> Linear classifier
+      seed: 42
+    model:
+      architecture: bert_linear
+      model_name: flax-community/indonesian-roberta-base
+      hidden_size: 768
+
+  EXP-05:
+    experiment:
+      name: indobert_gru
+      description: IndoBERT -> GRU -> Softmax
+      seed: 42
+    model:
+      architecture: bert_gru
+      model_name: indobenchmark/indobert-base-p1
+      gru_hidden_size: 256
+
+  EXP-06:
+    experiment:
+      name: indobert_cnn
+      description: IndoBERT -> CNN -> Softmax
+      seed: 42
+    model:
+      architecture: bert_cnn
+      model_name: indobenchmark/indobert-base-p1
+      cnn_out_channels: 128
+
+  EXP-07:
+    experiment:
+      name: charcnn
+      description: Char -> CNN -> Softmax
+      seed: 42
+    model:
+      architecture: char_cnn
+      freeze_bert: true
+      cnn_out_channels: 128
+
+  EXP-08:
+    experiment:
+      name: charbilstm
+      description: Char -> BiLSTM -> Softmax
+      seed: 42
+    model:
+      architecture: char_bilstm
+      freeze_bert: true
+      lstm_hidden_size: 128
+
+  EXP-09:
+    experiment:
+      name: charcnn_bilstm
+      description: Char -> CNN -> BiLSTM -> Softmax
+      seed: 42
+    model:
+      architecture: char_cnn_bilstm
+      freeze_bert: true
+      cnn_out_channels: 128
+      lstm_hidden_size: 128
+
+  EXP-10:
+    experiment:
+      name: indobert_charcnn_hybrid
+      description: IndoBERT + CharCNN -> concat -> Linear
+      seed: 42
+    model:
+      architecture: hybrid_bert_charcnn
+      model_name: indobenchmark/indobert-base-p1
+      cnn_out_channels: 128
+
+  EXP-11:
+    experiment:
+      name: distilbert_charcnn_hybrid
+      description: DistilBERT + CharCNN -> Linear
+      seed: 42
+    model:
+      architecture: hybrid_bert_charcnn
+      model_name: cahya/distilbert-base-indonesian
+      hidden_size: 768
+      cnn_out_channels: 128
