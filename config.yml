@@ -1,6 +1,6 @@
 model:
   architecture: bert_linear
-  model_name: indobenchmark/indobert-base-p1
+  model_name: indobenchmark/indobert-large-p2
   hidden_size: 768
   freeze_bert: false
   mlp_hidden_size: 256
@@ -43,7 +43,7 @@ experiments:
       seed: 42
     model:
       architecture: bert_linear
-      model_name: indobenchmark/indobert-base-p1
+      model_name: indobenchmark/indobert-large-p2
 
   EXP-02:
     experiment:
@@ -52,7 +52,7 @@ experiments:
       seed: 42
     model:
       architecture: bert_mlp
-      model_name: indobenchmark/indobert-base-p1
+      model_name: indobenchmark/indobert-large-p2
       mlp_hidden_size: 256
 
   EXP-03:
@@ -82,7 +82,7 @@ experiments:
       seed: 42
     model:
       architecture: bert_gru
-      model_name: indobenchmark/indobert-base-p1
+      model_name: indobenchmark/indobert-large-p2
       gru_hidden_size: 256
 
   EXP-06:
@@ -92,7 +92,7 @@ experiments:
       seed: 42
     model:
       architecture: bert_cnn
-      model_name: indobenchmark/indobert-base-p1
+      model_name: indobenchmark/indobert-large-p2
       cnn_out_channels: 128
 
   EXP-07:
@@ -133,7 +133,7 @@ experiments:
       seed: 42
     model:
       architecture: hybrid_bert_charcnn
-      model_name: indobenchmark/indobert-base-p1
+      model_name: indobenchmark/indobert-large-p2
       cnn_out_channels: 128
 
   EXP-11:
