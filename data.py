@@ -1,15 +1,13 @@
 import os
-
 import torch
 import pandas as pd
 from torch.utils.data import Dataset
-
 from type import LogType
 from utils import Utils
 
 
 class Data:
-    def __init__(self) -> None:
+    def __init__(self):
         self.utils = Utils()
 
     def label2id(self, labels: list) -> dict:
@@ -33,7 +31,6 @@ class Data:
 
         try:
             return pd.read_csv(path)
-
         except Exception as e:
             self.utils.log("Data", LogType.ERROR, f"Failed to load CSV: {e}")
             exit(1)
@@ -75,7 +72,7 @@ class TokenDataset(Dataset):
             "input_ids": encoding["input_ids"].squeeze(),
             "attention_mask": encoding["attention_mask"].squeeze(),
             "token_type_ids": encoding.get(
-                "token_type_ids", torch.zeros(self.max_length)
+                "token_type_ids", torch.zeros(self.max_length, dtype=torch.long)
             ).squeeze(),
             "labels": torch.tensor(label_id, dtype=torch.long),
         }

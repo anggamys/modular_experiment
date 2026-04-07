@@ -1,16 +1,12 @@
-import csv
 import json
 import yaml
 import torch
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
-from typing import Tuple
-from transformers import get_linear_schedule_with_warmup
-
 from torch.optim import AdamW
+from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
-
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score,
@@ -30,11 +26,9 @@ from utils import Utils
 class Trainer:
     def __init__(self, config_path: str):
         self.data = Data()
-        self.token_dataset = TokenDataset
         self.utils = Utils()
         self.hugging_face = HuggingFace()
 
-        # Load configuration
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f)
 
@@ -44,23 +38,15 @@ class Trainer:
             else "cpu"
         )
 
-        self.utils.log(
-            "Trainer",
-            LogType.INFO,
-            f"Using device: {self.device}",
-        )
-
-        # Set seed
         self._set_seed(self.config["experiment"]["seed"])
 
-        # Create output directories
         self.checkpoint_dir = Path(self.config["output"]["model_save_dir"])
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         self.utils.log(
             "Trainer",
             LogType.INFO,
-            f"Checkpoint directory: {self.checkpoint_dir}",
+            f"Device: {self.device} | Path: {self.checkpoint_dir}",
         )
 
     def _set_seed(self, seed: int):
@@ -69,20 +55,12 @@ class Trainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-    def prepare_data(
-        self, csv_path: str
-    ) -> Tuple[TokenDataset, TokenDataset, TokenDataset, dict, dict]:
-        self.utils.log("Trainer", LogType.INFO, f"Loading data from {csv_path}")
+    def prepare_data(self, csv_path: str):
+        self.utils.log("Trainer", LogType.INFO, f"Loading: {csv_path}")
 
-        # Load data
         df = self.data.load_data(csv_path)
-        self.utils.log(
-            "Trainer",
-            LogType.INFO,
-            f"Data shape: {df.shape}",
-        )
+        self.utils.log("Trainer", LogType.INFO, f"Shape: {df.shape}")
 
-        # Create label mappings
         labels = df["final_pos_tag"].unique().tolist()
         label2id = self.data.label2id(labels)
         id2label = self.data.id2label(labels)
@@ -90,22 +68,18 @@ class Trainer:
         self.utils.log(
             "Trainer",
             LogType.INFO,
-            f"Number of labels: {len(label2id)} | Label to ID mapping: {label2id}",
+            f"Labels: {len(label2id)}, Mapping: {label2id}",
         )
 
-        # Download model and get tokenizer
         model_path = self.hugging_face.huggingface_download(
             self.config["model"]["model_name"]
         )
-
         tokenizer = self.hugging_face.tokenizer(model_path)
 
-        # Split data: train-val-test
         test_size = self.config["data"]["test_size"]
         val_size = self.config["data"]["validation_size"]
         random_state = self.config["data"]["random_state"]
 
-        # First split: separate test set
         train_val_tokens, test_tokens, train_val_labels, test_labels = train_test_split(
             df["token"],
             df["final_pos_tag"],
@@ -113,7 +87,6 @@ class Trainer:
             random_state=random_state,
         )
 
-        # Second split: separate validation from training
         train_tokens, val_tokens, train_labels, val_labels = train_test_split(
             train_val_tokens,
             train_val_labels,
@@ -124,107 +97,91 @@ class Trainer:
         self.utils.log(
             "Trainer",
             LogType.INFO,
-            f"Train set size: {len(train_tokens)} | Val set size: {len(val_tokens)} | Test set size: {len(test_tokens)}",
+            f"Split: train={len(train_tokens)} val={len(val_tokens)} test={len(test_tokens)}",
         )
 
-        # Create datasets
-        train_dataset = TokenDataset(
-            train_tokens.tolist(),
-            train_labels.tolist(),
+        max_len = self.config["data"]["max_length"]
+
+        return (
+            TokenDataset(
+                train_tokens.tolist(),
+                train_labels.tolist(),
+                label2id,
+                tokenizer,
+                max_len,
+            ),
+            TokenDataset(
+                val_tokens.tolist(), val_labels.tolist(), label2id, tokenizer, max_len
+            ),
+            TokenDataset(
+                test_tokens.tolist(), test_labels.tolist(), label2id, tokenizer, max_len
+            ),
             label2id,
-            tokenizer,
-            self.config["data"]["max_length"],
+            id2label,
+            model_path,
         )
 
-        val_dataset = TokenDataset(
-            val_tokens.tolist(),
-            val_labels.tolist(),
-            label2id,
-            tokenizer,
-            self.config["data"]["max_length"],
-        )
-
-        test_dataset = TokenDataset(
-            test_tokens.tolist(),
-            test_labels.tolist(),
-            label2id,
-            tokenizer,
-            self.config["data"]["max_length"],
-        )
-
-        return train_dataset, val_dataset, test_dataset, label2id, id2label
-
-    def train(
-        self,
-        train_dataset: TokenDataset,
-        val_dataset: TokenDataset,
-        label2id: dict,
-        id2label: dict,
-        model_path: str,
-    ):
+    def train(self, train_dataset, val_dataset, label2id, id2label, model_path):
         self.utils.log("Trainer", LogType.INFO, "Starting training...")
 
-        # Update config with actual number of labels
         self.config["model"]["num_labels"] = len(label2id)
 
-        # Load pretrained model
         bert_model = self.hugging_face.model(model_path)
-
-        # Create model
         model = IndoBERTForTokenClassification(
             bert_model,
             num_labels=self.config["model"]["num_labels"],
             hidden_size=self.config["model"]["hidden_size"],
         )
 
-        # Freeze BERT if configured
         if self.config["model"]["freeze_bert"]:
             model.freeze_bert_encoder()
 
         model.to(self.device)
 
-        # Create data loaders
-        try:
-            batch_size = int(self.config["training"]["batch_size"])
-            learning_rate = float(self.config["training"]["learning_rate"])
-            weight_decay = float(self.config["training"]["weight_decay"])
-            num_epochs = int(self.config["training"]["num_epochs"])
-            warmup_steps = int(self.config["training"]["warmup_steps"])
+        batch_size = self.config["training"]["batch_size"]
+        num_workers = min(4, len(train_dataset) // batch_size)
 
-        except (TypeError, ValueError) as error:
-            self.utils.log(
-                "Trainer",
-                LogType.ERROR,
-                f"Invalid numeric value in training config: {error}",
-            )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=self.device.type == "cuda",
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=self.device.type == "cuda",
+        )
 
-            raise SystemExit(1)
-
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-        # Optimizer
         optimizer = AdamW(
             model.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay,
+            lr=self.config["training"]["learning_rate"],
+            weight_decay=self.config["training"]["weight_decay"],
         )
 
-        # Learning rate scheduler
-        total_steps = len(train_loader) * num_epochs
+        total_steps = len(train_loader) * self.config["training"]["num_epochs"]
+        warmup_steps = self.config["training"]["warmup_steps"]
 
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=warmup_steps,
-            num_training_steps=total_steps,
-        )
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return float(step) / float(max(1, warmup_steps))
+            return max(
+                0.0,
+                float(total_steps - step) / float(max(1, total_steps - warmup_steps)),
+            )
 
-        # Training loop
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        amp_enabled = self.device.type == "cuda"
+        scaler = GradScaler(enabled=amp_enabled)
+
         best_val_loss = float("inf")
         patience = 3
         patience_counter = 0
 
-        training_results = {
+        results = {
             "epochs": [],
             "train_loss": [],
             "val_loss": [],
@@ -232,37 +189,32 @@ class Trainer:
             "val_f1": [],
         }
 
-        for epoch in range(num_epochs):
-            self.utils.log(
-                "Trainer",
-                LogType.INFO,
-                f"Epoch {epoch + 1}/{num_epochs}",
+        for epoch in range(self.config["training"]["num_epochs"]):
+            train_loss = self._train_epoch(
+                model, train_loader, optimizer, scheduler, scaler, amp_enabled
             )
 
-            # Training phase
-            train_loss = self._train_epoch(model, train_loader, optimizer, scheduler)
+            val_loss, val_metrics = self._validate_epoch(
+                model, val_loader, id2label, amp_enabled
+            )
 
-            # Validation phase
-            val_loss, val_metrics = self._validate_epoch(model, val_loader, id2label)
-
-            training_results["epochs"].append(epoch + 1)
-            training_results["train_loss"].append(train_loss)
-            training_results["val_loss"].append(val_loss)
-            training_results["val_accuracy"].append(val_metrics["accuracy"])
-            training_results["val_f1"].append(val_metrics["f1"])
+            results["epochs"].append(epoch + 1)
+            results["train_loss"].append(train_loss)
+            results["val_loss"].append(val_loss)
+            results["val_accuracy"].append(val_metrics["accuracy"])
+            results["val_f1"].append(val_metrics["f1"])
 
             self.utils.log(
                 "Trainer",
                 LogType.INFO,
-                f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Accuracy: {val_metrics['accuracy']:.4f} | Val F1: {val_metrics['f1']:.4f}",
+                f"Ep {epoch + 1} | Loss: {train_loss:.4f}/{val_loss:.4f} | Acc: {val_metrics['accuracy']:.4f} | F1: {val_metrics['f1']:.4f}",
             )
 
-            # Save best model
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
 
-                checkpoint_path = self.checkpoint_dir / f"model_epoch_{epoch + 1}.pt"
+                ckpt_path = self.checkpoint_dir / f"model_epoch_{epoch + 1}.pt"
                 torch.save(
                     {
                         "epoch": epoch + 1,
@@ -272,65 +224,39 @@ class Trainer:
                         "label2id": label2id,
                         "id2label": id2label,
                     },
-                    checkpoint_path,
+                    ckpt_path,
                 )
-
                 self.utils.log(
                     "Trainer",
                     LogType.INFO,
-                    f"Model saved to {checkpoint_path}",
+                    f"Saved: {ckpt_path.name}",
                 )
             else:
                 patience_counter += 1
 
-            # Early stopping
             if patience_counter >= patience:
                 self.utils.log(
                     "Trainer",
                     LogType.WARNING,
                     f"Early stopping at epoch {epoch + 1}",
                 )
-
                 break
 
-        # Save training results (JSON)
         results_path = self.checkpoint_dir / "training_results.json"
         with open(results_path, "w") as f:
-            json.dump(training_results, f, indent=2)
+            json.dump(results, f, indent=2)
 
-        # Save training results (CSV)
+        self.utils.log("Trainer", LogType.INFO, f"Results: {results_path}")
 
-        csv_path = self.checkpoint_dir / "training_results.csv"
-        fieldnames = ["epoch", "train_loss", "val_loss", "val_accuracy", "val_f1"]
+        return model, label2id, id2label
 
-        with open(csv_path, "w", newline="") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-
-            for i in range(len(training_results["epochs"])):
-                row = {
-                    "epoch": training_results["epochs"][i],
-                    "train_loss": training_results["train_loss"][i],
-                    "val_loss": training_results["val_loss"][i],
-                    "val_accuracy": training_results["val_accuracy"][i],
-                    "val_f1": training_results["val_f1"][i],
-                }
-
-                writer.writerow(row)
-
-        self.utils.log(
-            "Trainer",
-            LogType.INFO,
-            f"Training results saved to {results_path} and {csv_path}",
-        )
-
-        return model, label2id, id2label, training_results
-
-    def _train_epoch(self, model, train_loader, optimizer, scheduler):
+    def _train_epoch(
+        self, model, train_loader, optimizer, scheduler, scaler, amp_enabled
+    ):
         model.train()
         total_loss = 0
 
-        for batch in tqdm(train_loader, desc="Training"):
+        for batch in tqdm(train_loader, desc="Training", leave=False):
             input_ids = batch["input_ids"].to(self.device)
             attention_mask = batch["attention_mask"].to(self.device)
             token_type_ids = batch["token_type_ids"].to(self.device)
@@ -338,47 +264,52 @@ class Trainer:
 
             optimizer.zero_grad()
 
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                labels=labels,
-            )
-
-            loss = outputs["loss"]
-            total_loss += loss.item()
-
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(), self.config["training"]["max_grad_norm"]
-            )
-
-            optimizer.step()
-            scheduler.step()
-
-        return total_loss / len(train_loader)
-
-    def _validate_epoch(self, model, val_loader, id2label):
-        model.eval()
-        total_loss = 0
-        all_predictions = []
-        all_labels = []
-
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc="Validating"):
-                input_ids = batch["input_ids"].to(self.device)
-                attention_mask = batch["attention_mask"].to(self.device)
-                token_type_ids = batch["token_type_ids"].to(self.device)
-                labels = batch["labels"].to(self.device)
-
+            with torch.autocast(device_type=self.device.type, enabled=amp_enabled):
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     token_type_ids=token_type_ids,
                     labels=labels,
                 )
-
                 loss = outputs["loss"]
+
+            total_loss += loss.item()
+
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), self.config["training"]["max_grad_norm"]
+            )
+
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+
+        return total_loss / len(train_loader)
+
+    def _validate_epoch(self, model, val_loader, id2label, amp_enabled):
+        model.eval()
+        total_loss = 0
+        all_predictions = []
+        all_labels = []
+
+        with torch.no_grad():
+            for batch in tqdm(val_loader, desc="Validating", leave=False):
+                input_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
+                token_type_ids = batch["token_type_ids"].to(self.device)
+                labels = batch["labels"].to(self.device)
+
+                with torch.autocast(device_type=self.device.type, enabled=amp_enabled):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        token_type_ids=token_type_ids,
+                        labels=labels,
+                    )
+                    loss = outputs["loss"]
+
                 total_loss += loss.item()
 
                 logits = outputs["logits"]
@@ -387,42 +318,40 @@ class Trainer:
                 all_predictions.extend(predictions.cpu().numpy().tolist())
                 all_labels.extend(labels.cpu().numpy().tolist())
 
-        # Calculate metrics
         accuracy = accuracy_score(all_labels, all_predictions)
         f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
 
-        metrics = {
-            "accuracy": accuracy,
-            "f1": f1,
-        }
-
-        return total_loss / len(val_loader), metrics
+        return total_loss / len(val_loader), {"accuracy": accuracy, "f1": f1}
 
     def evaluate(self, model, test_dataset, id2label):
-        self.utils.log("Trainer", LogType.INFO, "Evaluating on test set...")
+        self.utils.log("Trainer", LogType.INFO, "Evaluating...")
 
         model.eval()
+        batch_size = self.config["training"]["batch_size"]
+        amp_enabled = self.device.type == "cuda"
         test_loader = DataLoader(
             test_dataset,
-            batch_size=self.config["training"]["batch_size"],
+            batch_size=batch_size,
             shuffle=False,
+            pin_memory=amp_enabled,
         )
 
         all_predictions = []
         all_labels = []
 
         with torch.no_grad():
-            for batch in tqdm(test_loader, desc="Evaluating"):
+            for batch in tqdm(test_loader, desc="Evaluating", leave=False):
                 input_ids = batch["input_ids"].to(self.device)
                 attention_mask = batch["attention_mask"].to(self.device)
                 token_type_ids = batch["token_type_ids"].to(self.device)
                 labels = batch["labels"].to(self.device)
 
-                outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    token_type_ids=token_type_ids,
-                )
+                with torch.autocast(device_type=self.device.type, enabled=amp_enabled):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        token_type_ids=token_type_ids,
+                    )
 
                 logits = outputs["logits"]
                 predictions = torch.argmax(logits, dim=-1)
@@ -430,7 +359,6 @@ class Trainer:
                 all_predictions.extend(predictions.cpu().numpy().tolist())
                 all_labels.extend(labels.cpu().numpy().tolist())
 
-        # Calculate metrics
         accuracy = accuracy_score(all_labels, all_predictions)
         precision = precision_score(
             all_labels, all_predictions, average="weighted", zero_division=0
@@ -442,24 +370,19 @@ class Trainer:
 
         f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
 
-        ordered_label_names = []
-        for i in range(len(id2label)):
-            label_name = id2label.get(i, id2label.get(str(i)))
-            if label_name is None:
-                label_name = str(i)
+        ordered_labels = [
+            id2label.get(i, id2label.get(str(i), str(i))) for i in range(len(id2label))
+        ]
 
-            ordered_label_names.append(label_name)
-
-        # Classification report
         class_report = classification_report(
             all_labels,
             all_predictions,
-            labels=list(range(len(ordered_label_names))),
-            target_names=ordered_label_names,
+            labels=list(range(len(ordered_labels))),
+            target_names=ordered_labels,
             zero_division=0,
         )
 
-        evaluation_results = {
+        eval_results = {
             "accuracy": accuracy,
             "precision": precision,
             "recall": recall,
@@ -467,75 +390,14 @@ class Trainer:
             "classification_report": class_report,
         }
 
-        # Save evaluation results
         eval_path = self.checkpoint_dir / "evaluation_results.json"
         with open(eval_path, "w") as f:
-            eval_dict = {
-                k: v
-                for k, v in evaluation_results.items()
-                if k != "classification_report"
-            }
-
-            json.dump(eval_dict, f, indent=2)
+            json.dump(eval_results, f, indent=2)
 
         self.utils.log(
             "Trainer",
             LogType.INFO,
-            f"\nTest Metrics:\n{class_report}",
+            f"Eval Results:\n{class_report}",
         )
 
-        return evaluation_results
-
-
-def main():
-    utils = Utils()
-    args = utils.argument_parser(
-        description="IndoBERT POS Tagging Pipeline",
-        arguments=[
-            {
-                "name": "--config",
-                "help": "Path to config file",
-                "required": False,
-                "default": "config.yml",
-                "type": str,
-            },
-            {
-                "name": "--dataset",
-                "help": "Path to dataset CSV file (required for explore mode)",
-                "required": False,
-                "type": str,
-            },
-        ],
-    )
-
-    # Initialize trainer
-    trainer = Trainer(args.config)
-
-    # Prepare data
-    train_dataset, val_dataset, test_dataset, label2id, id2label = trainer.prepare_data(
-        args.dataset
-    )
-
-    # Get model path
-    hugging_face = HuggingFace()
-    model_path = hugging_face.huggingface_download(
-        trainer.config["model"]["model_name"]
-    )
-
-    # Train
-    model, label2id, id2label, training_results = trainer.train(
-        train_dataset, val_dataset, label2id, id2label, model_path
-    )
-
-    # Evaluate
-    trainer.evaluate(model, test_dataset, id2label)
-
-    trainer.utils.log(
-        "Main",
-        LogType.INFO,
-        f"Training completed! Results saved to {trainer.checkpoint_dir}",
-    )
-
-
-if __name__ == "__main__":
-    main()
+        return eval_results
