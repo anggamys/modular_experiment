@@ -1,5 +1,7 @@
 import json
+import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -54,6 +56,7 @@ class Trainer:
             f"Device: {self.device} | Path: {self.checkpoint_dir}",
         )
         self._apply_epoch_policy()
+        self._apply_learning_rate_policy()
 
     def _resolve_experiment_config(self, raw_config: dict, exp_id: str | None):
         experiments = raw_config.get("experiments", {})
@@ -114,6 +117,160 @@ class Trainer:
 
         self.config["training"]["num_epochs"] = clamped_epochs
 
+    def _apply_learning_rate_policy(self):
+        training_cfg = self.config.get("training", {})
+        if not training_cfg.get("enforce_learning_rate_policy", True):
+            return
+
+        architecture = str(self.config.get("model", {}).get("architecture", "")).lower()
+        model_name = str(self.config.get("model", {}).get("model_name", "")).lower()
+
+        if architecture.startswith("char_"):
+            if architecture == "char_cnn":
+                recommended_lr = 1e-3
+            elif architecture == "char_bilstm":
+                recommended_lr = 7.5e-4
+            else:
+                recommended_lr = 5e-4
+        elif architecture == "hybrid_bert_charcnn":
+            recommended_lr = 3e-5 if "distilbert" in model_name else 2e-5
+        else:
+            recommended_lr = 3e-5 if "distilbert" in model_name else 2e-5
+
+        current_lr = float(training_cfg.get("learning_rate", recommended_lr))
+        if current_lr != recommended_lr:
+            self.utils.log(
+                "Trainer",
+                LogType.WARNING,
+                f"learning_rate={current_lr} adjusted to {recommended_lr} for architecture={architecture}",
+            )
+        self.config["training"]["learning_rate"] = recommended_lr
+
+        self.config["training"].setdefault("bert_learning_rate", 2e-5)
+        self.config["training"].setdefault("head_learning_rate", 1e-4)
+        self.config["training"].setdefault("char_learning_rate", 1e-3)
+
+    def _build_optimizer(self, model):
+        training_cfg = self.config["training"]
+        architecture = str(self.config["model"].get("architecture", "")).lower()
+        use_split_lr = bool(training_cfg.get("use_split_learning_rate", False))
+        weight_decay = float(training_cfg["weight_decay"])
+
+        base_lr = float(training_cfg["learning_rate"])
+        bert_lr = float(training_cfg.get("bert_learning_rate", base_lr))
+        head_lr = float(training_cfg.get("head_learning_rate", base_lr))
+        char_lr = float(training_cfg.get("char_learning_rate", base_lr))
+
+        if architecture.startswith("char_"):
+            optimizer = AdamW(
+                [p for p in model.parameters() if p.requires_grad],
+                lr=char_lr,
+                weight_decay=weight_decay,
+            )
+            self.utils.log("Trainer", LogType.INFO, f"Optimizer LR (char): {char_lr}")
+            return optimizer, {
+                "strategy": "char-global",
+                "effective_param_group_lrs": [{"name": "char", "lr": char_lr}],
+            }
+
+        if use_split_lr and hasattr(model, "bert"):
+            bert_params = [p for p in model.bert.parameters() if p.requires_grad]
+            bert_param_ids = {id(p) for p in bert_params}
+
+            if architecture == "hybrid_bert_charcnn" and hasattr(model, "char_encoder"):
+                char_params = [
+                    p
+                    for p in model.char_encoder.parameters()
+                    if p.requires_grad and id(p) not in bert_param_ids
+                ]
+                char_param_ids = {id(p) for p in char_params}
+                head_params = [
+                    p
+                    for p in model.parameters()
+                    if p.requires_grad
+                    and id(p) not in bert_param_ids
+                    and id(p) not in char_param_ids
+                ]
+
+                param_groups = []
+                if bert_params:
+                    param_groups.append(
+                        {
+                            "params": bert_params,
+                            "lr": bert_lr,
+                            "weight_decay": weight_decay,
+                        }
+                    )
+                if char_params:
+                    param_groups.append(
+                        {
+                            "params": char_params,
+                            "lr": char_lr,
+                            "weight_decay": weight_decay,
+                        }
+                    )
+                if head_params:
+                    param_groups.append(
+                        {
+                            "params": head_params,
+                            "lr": head_lr,
+                            "weight_decay": weight_decay,
+                        }
+                    )
+
+                optimizer = AdamW(param_groups)
+                self.utils.log(
+                    "Trainer",
+                    LogType.INFO,
+                    f"Optimizer split LR | bert={bert_lr} char={char_lr} head={head_lr}",
+                )
+                return optimizer, {
+                    "strategy": "split-hybrid",
+                    "effective_param_group_lrs": [
+                        {"name": "bert", "lr": bert_lr},
+                        {"name": "char", "lr": char_lr},
+                        {"name": "head", "lr": head_lr},
+                    ],
+                }
+
+            head_params = [
+                p for p in model.parameters() if p.requires_grad and id(p) not in bert_param_ids
+            ]
+            param_groups = []
+            if bert_params:
+                param_groups.append(
+                    {"params": bert_params, "lr": bert_lr, "weight_decay": weight_decay}
+                )
+            if head_params:
+                param_groups.append(
+                    {"params": head_params, "lr": head_lr, "weight_decay": weight_decay}
+                )
+
+            optimizer = AdamW(param_groups)
+            self.utils.log(
+                "Trainer",
+                LogType.INFO,
+                f"Optimizer split LR | bert={bert_lr} head={head_lr}",
+            )
+            return optimizer, {
+                "strategy": "split-bert-head",
+                "effective_param_group_lrs": [
+                    {"name": "bert", "lr": bert_lr},
+                    {"name": "head", "lr": head_lr},
+                ],
+            }
+
+        optimizer = AdamW(
+            model.parameters(),
+            lr=base_lr,
+            weight_decay=weight_decay,
+        )
+        self.utils.log("Trainer", LogType.INFO, f"Optimizer LR (global): {base_lr}")
+        return optimizer, {
+            "strategy": "global",
+            "effective_param_group_lrs": [{"name": "global", "lr": base_lr}],
+        }
+
     def _set_seed(self, seed: int):
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -136,6 +293,7 @@ class Trainer:
         class_weights=None,
     ):
         self.utils.log("Trainer", LogType.INFO, "Starting training...")
+        train_started_at = time.time()
 
         model.to(self.device)
 
@@ -167,11 +325,7 @@ class Trainer:
             pin_memory=self.device.type == "cuda",
         )
 
-        optimizer = AdamW(
-            model.parameters(),
-            lr=float(self.config["training"]["learning_rate"]),
-            weight_decay=float(self.config["training"]["weight_decay"]),
-        )
+        optimizer, optimizer_lr_details = self._build_optimizer(model)
 
         total_steps = len(train_loader) * self.config["training"]["num_epochs"]
         warmup_steps = float(self.config["training"]["warmup_steps"])
@@ -207,16 +361,19 @@ class Trainer:
         best_epoch = None
         best_checkpoint_name = None
 
-        results = {
+        results: dict[str, Any] = {
             "epochs": [],
             "train_loss": [],
             "val_loss": [],
             "val_accuracy": [],
             "val_f1_weighted": [],
             "val_f1_macro": [],
+            "epoch_train_seconds": [],
+            "optimizer": optimizer_lr_details,
         }
 
         for epoch in range(self.config["training"]["num_epochs"]):
+            epoch_started_at = time.time()
             train_loss = self._train_epoch(
                 model, train_loader, optimizer, scheduler, scaler, amp_enabled
             )
@@ -229,6 +386,7 @@ class Trainer:
             results["val_accuracy"].append(val_metrics["accuracy"])
             results["val_f1_weighted"].append(val_metrics["f1_weighted"])
             results["val_f1_macro"].append(val_metrics["f1_macro"])
+            results["epoch_train_seconds"].append(time.time() - epoch_started_at)
 
             self.utils.log(
                 "Trainer",
@@ -291,6 +449,20 @@ class Trainer:
                     f"Early stopping at epoch {epoch + 1}",
                 )
                 break
+
+        train_finished_at = time.time()
+        total_train_seconds = train_finished_at - train_started_at
+        trained_epochs = len(results["epochs"])
+        avg_epoch_seconds = (
+            total_train_seconds / trained_epochs if trained_epochs > 0 else 0.0
+        )
+
+        results["timing"] = {
+            "train_started_at_unix": train_started_at,
+            "train_finished_at_unix": train_finished_at,
+            "total_train_seconds": total_train_seconds,
+            "avg_epoch_seconds": avg_epoch_seconds,
+        }
 
         results_path = self.checkpoint_dir / "training_results.json"
         with open(results_path, "w") as f:

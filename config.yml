@@ -13,6 +13,11 @@ training:
   batch_size: 32
   num_epochs: 4
   learning_rate: 2e-5
+  bert_learning_rate: 2e-5
+  head_learning_rate: 1e-4
+  char_learning_rate: 1e-3
+  use_split_learning_rate: true
+  enforce_learning_rate_policy: true
   weight_decay: 0.01
   warmup_steps: 200
   max_grad_norm: 1.0
@@ -79,6 +84,7 @@ experiments:
       hidden_size: 768
     training:
       num_epochs: 4
+      learning_rate: 3e-5
 
   EXP-04:
     experiment:
@@ -129,6 +135,7 @@ experiments:
       cnn_out_channels: 128
     training:
       num_epochs: 10
+      learning_rate: 1e-3
 
   EXP-08:
     experiment:
@@ -141,6 +148,7 @@ experiments:
       lstm_hidden_size: 128
     training:
       num_epochs: 10
+      learning_rate: 7.5e-4
 
   EXP-09:
     experiment:
@@ -154,6 +162,7 @@ experiments:
       lstm_hidden_size: 128
     training:
       num_epochs: 12
+      learning_rate: 5e-4
 
   EXP-10:
     experiment:
@@ -180,3 +189,4 @@ experiments:
       cnn_out_channels: 128
     training:
       num_epochs: 6
+      learning_rate: 3e-5
