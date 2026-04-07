@@ -22,19 +22,26 @@ class BaseClassifier(nn.Module):
         return outputs
 
 
+def _infer_bert_hidden_size(model: PreTrainedModel, fallback: int = 768) -> int:
+    config_hidden_size = getattr(getattr(model, "config", None), "hidden_size", None)
+    if config_hidden_size is not None:
+        return int(config_hidden_size)
+    return int(fallback)
+
+
 class BertLinearClassifier(BaseClassifier):
     def __init__(self, model: PreTrainedModel, num_labels: int, hidden_size: int = 768):
         super().__init__(num_labels=num_labels)
         self.bert = model
-        self.hidden_size = hidden_size
+        self.hidden_size = _infer_bert_hidden_size(model, hidden_size)
 
         self.dropout = nn.Dropout(0.1)
-        self.classifier = nn.Linear(hidden_size, num_labels)
+        self.classifier = nn.Linear(self.hidden_size, num_labels)
 
         self.utils.log(
             "BertLinearClassifier",
             LogType.INFO,
-            f"Model initialized with num_labels={num_labels}, hidden_size={hidden_size}",
+            f"Model initialized with num_labels={num_labels}, hidden_size={self.hidden_size}",
         )
 
     def forward(
@@ -126,7 +133,7 @@ class ModelBuilder:
                     bert_model, config_model["freeze_bert"]
                 ),
                 num_labels=num_labels,
-                hidden_size=config_model["hidden_size"],
+                hidden_size=config_model.get("hidden_size", 768),
             )
         elif architecture == "bert_mlp":
             model = BertMLPClassifier(
@@ -134,7 +141,7 @@ class ModelBuilder:
                     bert_model, config_model["freeze_bert"]
                 ),
                 num_labels=num_labels,
-                hidden_size=config_model["hidden_size"],
+                hidden_size=config_model.get("hidden_size", 768),
                 mlp_hidden_size=config_model.get("mlp_hidden_size", 256),
             )
         elif architecture == "bert_gru":
@@ -143,7 +150,7 @@ class ModelBuilder:
                     bert_model, config_model["freeze_bert"]
                 ),
                 num_labels=num_labels,
-                hidden_size=config_model["hidden_size"],
+                hidden_size=config_model.get("hidden_size", 768),
                 gru_hidden_size=config_model.get("gru_hidden_size", 256),
             )
         elif architecture == "bert_cnn":
@@ -152,7 +159,7 @@ class ModelBuilder:
                     bert_model, config_model["freeze_bert"]
                 ),
                 num_labels=num_labels,
-                hidden_size=config_model["hidden_size"],
+                hidden_size=config_model.get("hidden_size", 768),
                 cnn_out_channels=config_model.get("cnn_out_channels", 128),
             )
         elif architecture == "char_cnn":
@@ -183,7 +190,7 @@ class ModelBuilder:
                     bert_model, config_model["freeze_bert"]
                 ),
                 num_labels=num_labels,
-                hidden_size=config_model["hidden_size"],
+                hidden_size=config_model.get("hidden_size", 768),
                 char_vocab_size=char_vocab_size_safe,
                 char_embedding_dim=config_model.get("char_embedding_dim", 64),
                 cnn_out_channels=config_model.get("cnn_out_channels", 128),
@@ -215,6 +222,7 @@ class BertMLPClassifier(BaseClassifier):
     ):
         super().__init__(num_labels=num_labels)
         self.bert = model
+        hidden_size = _infer_bert_hidden_size(model, hidden_size)
         self.dropout = nn.Dropout(0.1)
         self.classifier = nn.Sequential(
             nn.Linear(hidden_size, mlp_hidden_size),
@@ -253,6 +261,7 @@ class BertGRUClassifier(BaseClassifier):
     ):
         super().__init__(num_labels=num_labels)
         self.bert = model
+        hidden_size = _infer_bert_hidden_size(model, hidden_size)
         self.gru = nn.GRU(
             input_size=hidden_size,
             hidden_size=gru_hidden_size,
@@ -295,6 +304,7 @@ class BertCNNClassifier(BaseClassifier):
     ):
         super().__init__(num_labels=num_labels)
         self.bert = model
+        hidden_size = _infer_bert_hidden_size(model, hidden_size)
         self.conv = nn.Conv1d(hidden_size, cnn_out_channels, kernel_size=3, padding=1)
         self.pool = nn.AdaptiveMaxPool1d(1)
         self.dropout = nn.Dropout(0.1)
@@ -431,6 +441,7 @@ class HybridBertCharCNNClassifier(BaseClassifier):
     ):
         super().__init__(num_labels=num_labels)
         self.bert = bert_model
+        hidden_size = _infer_bert_hidden_size(bert_model, hidden_size)
         self.char_encoder = CharCNNClassifier(
             num_labels=num_labels,
             char_vocab_size=char_vocab_size,
