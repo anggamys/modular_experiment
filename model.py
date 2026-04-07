@@ -78,3 +78,32 @@ class IndoBERTForTokenClassification(nn.Module):
 
     def unfreeze_bert_encoder(self):
         self.freeze_bert_encoder(False)
+
+
+class ModelBuilder:
+    def __init__(self):
+        self.utils = Utils()
+
+    def build_token_classifier(
+        self,
+        bert_model: PreTrainedModel,
+        num_labels: int,
+        hidden_size: int,
+        freeze_bert: bool,
+    ) -> IndoBERTForTokenClassification:
+        model = IndoBERTForTokenClassification(
+            bert_model,
+            num_labels=num_labels,
+            hidden_size=hidden_size,
+        )
+
+        if freeze_bert:
+            model.freeze_bert_encoder()
+
+        self.utils.log(
+            "ModelBuilder",
+            LogType.INFO,
+            f"Model ready: num_labels={num_labels}, freeze_bert={freeze_bert}",
+        )
+
+        return model

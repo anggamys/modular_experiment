@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Optional
 
-import torch.nn as nn
 from huggingface_hub import snapshot_download
 from transformers import (
     AutoModel,
@@ -10,7 +9,8 @@ from transformers import (
     PreTrainedTokenizerBase,
 )
 
-from utils import LogType, Utils
+from type import LogType
+from utils import Utils
 
 
 class HuggingFace:
@@ -75,26 +75,6 @@ class HuggingFace:
 
         return local_dir
 
-    def model_info(self, model_path: str):
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-            model = AutoModel.from_pretrained(model_path)
-
-            self.utils.log(
-                "HuggingFace",
-                LogType.INFO,
-                f"Model info for '{model_path}': Tokenizer vocab size: {tokenizer.vocab_size}, Model hidden size: {model.config.hidden_size}",
-            )
-
-        except Exception as error:
-            self.utils.log(
-                "HuggingFace",
-                LogType.ERROR,
-                f"Failed to load model info from '{model_path}': {error}",
-            )
-
-            exit(1)
-
     def tokenizer(self, model_path: str) -> PreTrainedTokenizerBase:
         if model_path is None:
             self.utils.log(
@@ -140,43 +120,3 @@ class HuggingFace:
             exit(1)
 
         return model
-
-    def get_embedding_vector(self, model: PreTrainedModel, token_id: int):
-        try:
-            embeddings = model.get_input_embeddings()
-            if embeddings is None:
-                self.utils.log(
-                    "HuggingFace",
-                    LogType.ERROR,
-                    "Model does not provide input embeddings.",
-                )
-
-                return None
-
-            if not isinstance(embeddings, nn.Embedding):
-                self.utils.log(
-                    "HuggingFace",
-                    LogType.ERROR,
-                    f"Unsupported embedding layer type: {type(embeddings)}",
-                )
-
-                return None
-
-            if token_id < 0 or token_id >= embeddings.num_embeddings:
-                self.utils.log(
-                    "HuggingFace",
-                    LogType.ERROR,
-                    f"Token ID {token_id} is out of range for embedding size {embeddings.num_embeddings}.",
-                )
-
-                return None
-
-            return embeddings.weight[token_id].detach().cpu().tolist()
-        except Exception as error:
-            self.utils.log(
-                "HuggingFace",
-                LogType.ERROR,
-                f"Failed to get embedding vector for token ID {token_id}: {error}",
-            )
-
-            exit(1)

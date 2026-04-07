@@ -1,5 +1,8 @@
 from utils import Utils
 from type import LogType
+from data import DataPipeline
+from model import ModelBuilder
+from hugging_face import HuggingFace
 from train import Trainer
 
 
@@ -37,19 +40,35 @@ def main():
 
     try:
         trainer = Trainer(args.config)
+        data_pipeline = DataPipeline()
+        model_builder = ModelBuilder()
+        hugging_face = HuggingFace()
 
-        (
-            train_dataset,
-            val_dataset,
-            test_dataset,
-            label2id,
-            id2label,
-            model_path,
-        ) = trainer.prepare_data(args.dataset)
-
-        model, label2id, id2label = trainer.train(
-            train_dataset, val_dataset, label2id, id2label, model_path
+        model_path = hugging_face.huggingface_download(
+            trainer.config["model"]["model_name"]
         )
+        tokenizer = hugging_face.tokenizer(model_path)
+
+        train_dataset, val_dataset, test_dataset, label2id, id2label = (
+            data_pipeline.prepare_datasets(
+                csv_path=args.dataset,
+                tokenizer=tokenizer,
+                test_size=trainer.config["data"]["test_size"],
+                validation_size=trainer.config["data"]["validation_size"],
+                random_state=trainer.config["data"]["random_state"],
+                max_length=trainer.config["data"]["max_length"],
+            )
+        )
+
+        bert_model = hugging_face.model(model_path)
+        model = model_builder.build_token_classifier(
+            bert_model=bert_model,
+            num_labels=len(label2id),
+            hidden_size=trainer.config["model"]["hidden_size"],
+            freeze_bert=trainer.config["model"]["freeze_bert"],
+        )
+
+        model = trainer.train(model, train_dataset, val_dataset, label2id, id2label)
 
         trainer.evaluate(model, test_dataset, id2label)
 

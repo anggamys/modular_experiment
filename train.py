@@ -7,7 +7,6 @@ from pathlib import Path
 from torch.optim import AdamW
 from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -16,18 +15,13 @@ from sklearn.metrics import (
     recall_score,
 )
 
-from data import Data, TokenDataset
-from hugging_face import HuggingFace
-from model import IndoBERTForTokenClassification
 from type import LogType
 from utils import Utils
 
 
 class Trainer:
     def __init__(self, config_path: str):
-        self.data = Data()
         self.utils = Utils()
-        self.hugging_face = HuggingFace()
 
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f)
@@ -55,86 +49,8 @@ class Trainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-    def prepare_data(self, csv_path: str):
-        self.utils.log("Trainer", LogType.INFO, f"Loading: {csv_path}")
-
-        df = self.data.load_data(csv_path)
-        self.utils.log("Trainer", LogType.INFO, f"Shape: {df.shape}")
-
-        labels = df["final_pos_tag"].unique().tolist()
-        label2id = self.data.label2id(labels)
-        id2label = self.data.id2label(labels)
-
-        self.utils.log(
-            "Trainer",
-            LogType.INFO,
-            f"Labels: {len(label2id)}, Mapping: {label2id}",
-        )
-
-        model_path = self.hugging_face.huggingface_download(
-            self.config["model"]["model_name"]
-        )
-        tokenizer = self.hugging_face.tokenizer(model_path)
-
-        test_size = self.config["data"]["test_size"]
-        val_size = self.config["data"]["validation_size"]
-        random_state = self.config["data"]["random_state"]
-
-        train_val_tokens, test_tokens, train_val_labels, test_labels = train_test_split(
-            df["token"],
-            df["final_pos_tag"],
-            test_size=test_size,
-            random_state=random_state,
-        )
-
-        train_tokens, val_tokens, train_labels, val_labels = train_test_split(
-            train_val_tokens,
-            train_val_labels,
-            test_size=val_size / (1 - test_size),
-            random_state=random_state,
-        )
-
-        self.utils.log(
-            "Trainer",
-            LogType.INFO,
-            f"Split: train={len(train_tokens)} val={len(val_tokens)} test={len(test_tokens)}",
-        )
-
-        max_len = self.config["data"]["max_length"]
-
-        return (
-            TokenDataset(
-                train_tokens.tolist(),
-                train_labels.tolist(),
-                label2id,
-                tokenizer,
-                max_len,
-            ),
-            TokenDataset(
-                val_tokens.tolist(), val_labels.tolist(), label2id, tokenizer, max_len
-            ),
-            TokenDataset(
-                test_tokens.tolist(), test_labels.tolist(), label2id, tokenizer, max_len
-            ),
-            label2id,
-            id2label,
-            model_path,
-        )
-
-    def train(self, train_dataset, val_dataset, label2id, id2label, model_path):
+    def train(self, model, train_dataset, val_dataset, label2id, id2label):
         self.utils.log("Trainer", LogType.INFO, "Starting training...")
-
-        self.config["model"]["num_labels"] = len(label2id)
-
-        bert_model = self.hugging_face.model(model_path)
-        model = IndoBERTForTokenClassification(
-            bert_model,
-            num_labels=self.config["model"]["num_labels"],
-            hidden_size=self.config["model"]["hidden_size"],
-        )
-
-        if self.config["model"]["freeze_bert"]:
-            model.freeze_bert_encoder()
 
         model.to(self.device)
 
@@ -194,9 +110,7 @@ class Trainer:
                 model, train_loader, optimizer, scheduler, scaler, amp_enabled
             )
 
-            val_loss, val_metrics = self._validate_epoch(
-                model, val_loader, id2label, amp_enabled
-            )
+            val_loss, val_metrics = self._validate_epoch(model, val_loader, amp_enabled)
 
             results["epochs"].append(epoch + 1)
             results["train_loss"].append(train_loss)
@@ -248,7 +162,7 @@ class Trainer:
 
         self.utils.log("Trainer", LogType.INFO, f"Results: {results_path}")
 
-        return model, label2id, id2label
+        return model
 
     def _train_epoch(
         self, model, train_loader, optimizer, scheduler, scaler, amp_enabled
@@ -288,7 +202,7 @@ class Trainer:
 
         return total_loss / len(train_loader)
 
-    def _validate_epoch(self, model, val_loader, id2label, amp_enabled):
+    def _validate_epoch(self, model, val_loader, amp_enabled):
         model.eval()
         total_loss = 0
         all_predictions = []
