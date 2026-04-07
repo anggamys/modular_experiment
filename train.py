@@ -294,9 +294,11 @@ class Trainer:
                 model.parameters(), self.config["training"]["max_grad_norm"]
             )
 
+            prev_scale = scaler.get_scale()
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
+            if not amp_enabled or scaler.get_scale() >= prev_scale:
+                scheduler.step()
 
         return total_loss / len(train_loader)
 
