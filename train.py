@@ -72,23 +72,14 @@ class Trainer:
             pin_memory=self.device.type == "cuda",
         )
 
-        lr = self.config["training"]["learning_rate"]
-        weight_decay = self.config["training"]["weight_decay"]
-
-        if isinstance(lr, str):
-            lr = float(lr)
-
-        if isinstance(weight_decay, str):
-            weight_decay = float(weight_decay)
-
         optimizer = AdamW(
             model.parameters(),
-            lr=lr,
-            weight_decay=weight_decay,
+            lr=float(self.config["training"]["learning_rate"]),
+            weight_decay=float(self.config["training"]["weight_decay"]),
         )
 
         total_steps = len(train_loader) * self.config["training"]["num_epochs"]
-        warmup_steps = self.config["training"]["warmup_steps"]
+        warmup_steps = float(self.config["training"]["warmup_steps"])
 
         def lr_lambda(step):
             if step < warmup_steps:
