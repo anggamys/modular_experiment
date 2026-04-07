@@ -1,19 +1,21 @@
 import json
-import yaml
-import torch
-import numpy as np
-from tqdm import tqdm
 from pathlib import Path
-from torch.optim import AdamW
-from torch.cuda.amp import GradScaler
-from torch.utils.data import DataLoader
+
+import numpy as np
+import torch
+import yaml
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
     f1_score,
+    precision_recall_fscore_support,
     precision_score,
     recall_score,
 )
+from torch.cuda.amp import GradScaler
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from type import LogType
 from utils import Utils
@@ -42,6 +44,9 @@ class Trainer:
         )
         self.checkpoint_dir = save_dir / exp_name
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.utils.has_file_logging():
+            self.utils.log2file(log_dir=str(self.checkpoint_dir))
 
         self.utils.log(
             "Trainer",
@@ -121,10 +126,27 @@ class Trainer:
             for key, value in batch.items()
         }
 
-    def train(self, model, train_dataset, val_dataset, label2id, id2label):
+    def train(
+        self,
+        model,
+        train_dataset,
+        val_dataset,
+        label2id,
+        id2label,
+        class_weights=None,
+    ):
         self.utils.log("Trainer", LogType.INFO, "Starting training...")
 
         model.to(self.device)
+
+        if class_weights is not None:
+            weight_tensor = (
+                class_weights.to(self.device)
+                if torch.is_tensor(class_weights)
+                else torch.tensor(class_weights, dtype=torch.float, device=self.device)
+            )
+            model.loss_fn = torch.nn.CrossEntropyLoss(weight=weight_tensor)
+            self.utils.log("Trainer", LogType.INFO, "Class-weighted loss enabled")
 
         batch_size = int(self.config["training"]["batch_size"])
         # Cap workers conservatively to avoid runtime warnings/freezes on limited environments.
@@ -169,9 +191,7 @@ class Trainer:
         early_stopping_monitor = self.config["training"].get(
             "early_stopping_monitor", "val_loss"
         )
-        early_stopping_mode = self.config["training"].get(
-            "early_stopping_mode", "min"
-        )
+        early_stopping_mode = self.config["training"].get("early_stopping_mode", "min")
         patience = int(self.config["training"].get("early_stopping_patience", 2))
 
         if early_stopping_mode not in {"min", "max"}:
@@ -184,6 +204,8 @@ class Trainer:
 
         best_score = float("inf") if early_stopping_mode == "min" else float("-inf")
         patience_counter = 0
+        best_epoch = None
+        best_checkpoint_name = None
 
         results = {
             "epochs": [],
@@ -232,24 +254,32 @@ class Trainer:
                 patience_counter = 0
 
                 ckpt_path = self.checkpoint_dir / f"model_epoch_{epoch + 1}.pt"
-                torch.save(
-                    {
-                        "epoch": epoch + 1,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "monitor": early_stopping_monitor,
-                        "monitor_mode": early_stopping_mode,
-                        "monitor_value": current_score,
-                        "val_loss": val_loss,
-                        "label2id": label2id,
-                        "id2label": id2label,
-                    },
-                    ckpt_path,
-                )
+                checkpoint_payload = {
+                    "epoch": epoch + 1,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "monitor": early_stopping_monitor,
+                    "monitor_mode": early_stopping_mode,
+                    "monitor_value": current_score,
+                    "val_loss": val_loss,
+                    "label2id": label2id,
+                    "id2label": id2label,
+                }
+                torch.save(checkpoint_payload, ckpt_path)
                 self.utils.log(
                     "Trainer",
                     LogType.INFO,
                     f"Saved: {ckpt_path.name}",
+                )
+
+                best_model_path = self.checkpoint_dir / "best_model.pt"
+                torch.save(checkpoint_payload, best_model_path)
+                best_epoch = epoch + 1
+                best_checkpoint_name = ckpt_path.name
+                self.utils.log(
+                    "Trainer",
+                    LogType.INFO,
+                    f"Updated best: {best_model_path.name} <- {ckpt_path.name}",
                 )
             else:
                 patience_counter += 1
@@ -265,6 +295,24 @@ class Trainer:
         results_path = self.checkpoint_dir / "training_results.json"
         with open(results_path, "w") as f:
             json.dump(results, f, indent=2)
+
+        if best_epoch is not None:
+            best_info = {
+                "best_epoch": best_epoch,
+                "best_checkpoint": best_checkpoint_name,
+                "best_alias": "best_model.pt",
+                "monitor": early_stopping_monitor,
+                "monitor_mode": early_stopping_mode,
+                "best_score": best_score,
+            }
+            best_info_path = self.checkpoint_dir / "best_model_info.json"
+            with open(best_info_path, "w") as f:
+                json.dump(best_info, f, indent=2)
+            self.utils.log(
+                "Trainer",
+                LogType.INFO,
+                f"Best model info: {best_info_path}",
+            )
 
         self.utils.log("Trainer", LogType.INFO, f"Results: {results_path}")
 
@@ -329,7 +377,9 @@ class Trainer:
         f1_weighted = f1_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
-        f1_macro = f1_score(all_labels, all_predictions, average="macro", zero_division=0)
+        f1_macro = f1_score(
+            all_labels, all_predictions, average="macro", zero_division=0
+        )
 
         return total_loss / len(val_loader), {
             "accuracy": accuracy,
@@ -380,7 +430,9 @@ class Trainer:
         f1_weighted = f1_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
-        f1_macro = f1_score(all_labels, all_predictions, average="macro", zero_division=0)
+        f1_macro = f1_score(
+            all_labels, all_predictions, average="macro", zero_division=0
+        )
 
         ordered_labels = [
             id2label.get(i, id2label.get(str(i), str(i))) for i in range(len(id2label))
@@ -394,13 +446,49 @@ class Trainer:
             zero_division=0,
         )
 
+        label_ids = list(range(len(ordered_labels)))
+        per_precision, per_recall, per_f1, per_support = (
+            precision_recall_fscore_support(
+                all_labels,
+                all_predictions,
+                labels=label_ids,
+                average=None,
+                zero_division=0,
+            )
+        )
+
+        per_precision_arr = np.asarray(per_precision, dtype=float)
+        per_recall_arr = np.asarray(per_recall, dtype=float)
+        per_f1_arr = np.asarray(per_f1, dtype=float)
+        if per_support is None:
+            per_support_arr = np.zeros(len(label_ids), dtype=int)
+        else:
+            per_support_arr = np.asarray(per_support, dtype=int)
+
+        per_label_metrics = []
+        for i, label_id in enumerate(label_ids):
+            per_label_metrics.append(
+                {
+                    "id": label_id,
+                    "label": ordered_labels[i],
+                    "precision": float(per_precision_arr[i]),
+                    "recall": float(per_recall_arr[i]),
+                    "f1": float(per_f1_arr[i]),
+                    "support": int(per_support_arr[i]),
+                }
+            )
+
         eval_results = {
-            "accuracy": accuracy,
-            "precision": precision,
-            "recall": recall,
-            "f1_weighted": f1_weighted,
-            "f1_macro": f1_macro,
-            "classification_report": class_report,
+            "summary": {
+                "num_samples": len(all_labels),
+                "num_labels": len(ordered_labels),
+                "accuracy": float(accuracy),
+                "precision_weighted": float(precision),
+                "recall_weighted": float(recall),
+                "f1_weighted": float(f1_weighted),
+                "f1_macro": float(f1_macro),
+            },
+            "per_label": per_label_metrics,
         }
 
         eval_path = self.checkpoint_dir / "evaluation_results.json"

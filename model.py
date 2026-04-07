@@ -1,7 +1,8 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
-from typing import Optional
 from transformers import PreTrainedModel
 
 from type import LogType

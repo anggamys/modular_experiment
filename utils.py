@@ -8,6 +8,7 @@ from type import LogType
 
 class Utils:
     _log_file_path = None
+    _log_file_paths = []
 
     def __init__(self):
         pass
@@ -29,8 +30,8 @@ class Utils:
 
             print(log_line)
 
-            if Utils._log_file_path:
-                with open(Utils._log_file_path, "a", encoding="utf-8") as f:
+            for log_file_path in Utils._log_file_paths:
+                with open(log_file_path, "a", encoding="utf-8") as f:
                     f.write(log_line + "\n")
 
         except Exception as e:
@@ -78,6 +79,9 @@ class Utils:
             self.log("Utils", LogType.ERROR, f"Argument parsing failed: {e}")
             raise
 
+    def has_file_logging(self) -> bool:
+        return len(Utils._log_file_paths) > 0
+
     def log2file(self, log_dir: str = "logs", filename: str | None = None):
         try:
             os.makedirs(log_dir, exist_ok=True)
@@ -86,10 +90,15 @@ class Utils:
                 dt = self.dateTimeNow().replace(":", "-").replace(" ", "_")
                 filename = f"run_{dt}.log"
 
-            Utils._log_file_path = os.path.join(log_dir, filename)
-            self.log("Utils", LogType.INFO, f"Log file enabled: {Utils._log_file_path}")
+            log_file_path = os.path.join(log_dir, filename)
+            Utils._log_file_path = log_file_path
 
-            return Utils._log_file_path
+            if log_file_path not in Utils._log_file_paths:
+                Utils._log_file_paths.append(log_file_path)
+
+            self.log("Utils", LogType.INFO, f"Log file enabled: {log_file_path}")
+
+            return log_file_path
         except Exception as e:
             self.log("Utils", LogType.ERROR, f"Failed to enable log file: {e}")
             raise

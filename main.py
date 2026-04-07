@@ -1,12 +1,15 @@
-from utils import Utils
-from type import LogType
-from data import DataPipeline
-from model import ModelBuilder
-from hugging_face import HuggingFace
-from train import Trainer
+import json
 import os
 import warnings
+
 from huggingface_hub.utils import logging as hf_logging
+
+from data import DataPipeline
+from hugging_face import HuggingFace
+from model import ModelBuilder
+from train import Trainer
+from type import LogType
+from utils import Utils
 
 
 def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
@@ -54,9 +57,41 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
             random_state=trainer.config["data"]["random_state"],
             max_length=trainer.config["data"]["max_length"],
             architecture=architecture,
-            label_column=trainer.config["data"].get("label_column", "label"),
-            char_max_length=trainer.config["data"].get("char_max_length", 32),
+            min_samples_per_label=trainer.config["data"].get(
+                "min_samples_per_label", 0
+            ),
+            rare_label_strategy=trainer.config["data"].get(
+                "rare_label_strategy", "keep"
+            ),
+            use_class_weight=trainer.config["training"].get("use_class_weight", True),
         )
+    )
+
+    label_distribution_path = trainer.checkpoint_dir / "label_distribution.json"
+    label_distribution_report = {
+        "experiment": trainer.config.get("experiment", {}),
+        "label_column": trainer.config["data"].get("label_column", "label"),
+        "min_samples_per_label": trainer.config["data"].get("min_samples_per_label", 0),
+        "rare_label_strategy": trainer.config["data"].get(
+            "rare_label_strategy", "keep"
+        ),
+        "dropped_labels": metadata.get("dropped_labels", []),
+        "label_counts_before_filter": metadata.get("label_counts_before_filter", {}),
+        "label_counts_after_filter": metadata.get("label_counts", {}),
+        "train_label_counts": metadata.get("train_label_counts", {}),
+        "val_label_counts": metadata.get("val_label_counts", {}),
+        "test_label_counts": metadata.get("test_label_counts", {}),
+        "class_weights": metadata.get("class_weights_list"),
+        "num_labels": len(label2id),
+    }
+
+    with open(label_distribution_path, "w", encoding="utf-8") as f:
+        json.dump(label_distribution_report, f, indent=2, ensure_ascii=False)
+
+    utils.log(
+        "Main",
+        LogType.INFO,
+        f"Label distribution report: {label_distribution_path}",
     )
 
     model = model_builder.build_model(
@@ -66,7 +101,14 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
         char_vocab_size=metadata.get("char_vocab_size"),
     )
 
-    model = trainer.train(model, train_dataset, val_dataset, label2id, id2label)
+    model = trainer.train(
+        model,
+        train_dataset,
+        val_dataset,
+        label2id,
+        id2label,
+        class_weights=metadata.get("class_weights"),
+    )
     trainer.evaluate(model, test_dataset, id2label)
 
     utils.log(
@@ -77,13 +119,11 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
 
 
 def main():
-    # Keep logs focused on app logs by muting noisy third-party warnings.
     warnings.filterwarnings(
         "ignore",
         message="This DataLoader will create .* worker processes.*",
         category=UserWarning,
     )
-
     warnings.filterwarnings(
         "ignore",
         message=r".*GradScaler.*deprecated.*",
@@ -128,10 +168,8 @@ def main():
 
     try:
         run_experiment(args.dataset, args.config, args.exp_id, args.log_file)
-
     except SystemExit:
         pass
-
     except Exception as e:
         utils.log("Main", LogType.ERROR, f"Error: {e}")
         raise

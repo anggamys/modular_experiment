@@ -21,6 +21,7 @@ training:
   early_stopping_mode: max
   early_stopping_patience: 2
   enforce_epoch_policy: true
+  use_class_weight: true
 
 data:
   test_size: 0.2
@@ -29,6 +30,8 @@ data:
   max_length: 32
   char_max_length: 24
   label_column: label
+  min_samples_per_label: 50
+  rare_label_strategy: drop
 
 output:
   model_save_dir: ./checkpoints

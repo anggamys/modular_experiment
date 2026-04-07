@@ -1,8 +1,10 @@
 import os
-import torch
+from collections import Counter
+
 import pandas as pd
-from torch.utils.data import Dataset
+import torch
 from sklearn.model_selection import train_test_split
+from torch.utils.data import Dataset
 
 from type import LogType
 from utils import Utils
@@ -54,6 +56,9 @@ class DataPipeline:
         architecture: str,
         label_column: str = "label",
         char_max_length: int = 32,
+        min_samples_per_label: int = 0,
+        rare_label_strategy: str = "keep",
+        use_class_weight: bool = True,
     ):
         self.utils.log("DataPipeline", LogType.INFO, f"Loading: {csv_path}")
         df = self.data.load_data(csv_path)
@@ -76,6 +81,50 @@ class DataPipeline:
 
             exit(1)
 
+        label_counts_before_filter = df[label_column].value_counts().to_dict()
+        raw_label_counts = df[label_column].value_counts().to_dict()
+        rare_labels = sorted(
+            [
+                label
+                for label, count in raw_label_counts.items()
+                if count < int(min_samples_per_label)
+            ],
+            key=lambda item: str(item),
+        )
+
+        strategy = str(rare_label_strategy).lower()
+        if min_samples_per_label > 0 and rare_labels:
+            if strategy == "error":
+                self.utils.log(
+                    "DataPipeline",
+                    LogType.ERROR,
+                    f"Found {len(rare_labels)} labels with < {min_samples_per_label} samples: {rare_labels}",
+                )
+                exit(1)
+
+            if strategy == "drop":
+                before = len(df)
+                df = df[~df[label_column].isin(rare_labels)].reset_index(drop=True)
+                self.utils.log(
+                    "DataPipeline",
+                    LogType.WARNING,
+                    f"Dropped {len(rare_labels)} rare labels (< {min_samples_per_label}) | rows: {before} -> {len(df)}",
+                )
+                if df.empty:
+                    self.utils.log(
+                        "DataPipeline",
+                        LogType.ERROR,
+                        "All rows removed after rare label filtering.",
+                    )
+                    exit(1)
+
+            else:
+                self.utils.log(
+                    "DataPipeline",
+                    LogType.WARNING,
+                    f"Keeping rare labels (< {min_samples_per_label}) with strategy='{strategy}'.",
+                )
+
         labels = df[label_column].unique().tolist()
         label2id = self.data.label2id(labels)
         id2label = self.data.id2label(labels)
@@ -86,19 +135,45 @@ class DataPipeline:
             f"Labels: {len(label2id)}, Mapping: {label2id}",
         )
 
-        train_val_tokens, test_tokens, train_val_labels, test_labels = train_test_split(
-            df["token"],
-            df[label_column],
-            test_size=test_size,
-            random_state=random_state,
-        )
+        try:
+            train_val_tokens, test_tokens, train_val_labels, test_labels = (
+                train_test_split(
+                    df["token"],
+                    df[label_column],
+                    test_size=test_size,
+                    random_state=random_state,
+                    stratify=df[label_column],
+                )
+            )
 
-        train_tokens, val_tokens, train_labels, val_labels = train_test_split(
-            train_val_tokens,
-            train_val_labels,
-            test_size=validation_size / (1 - test_size),
-            random_state=random_state,
-        )
+            train_tokens, val_tokens, train_labels, val_labels = train_test_split(
+                train_val_tokens,
+                train_val_labels,
+                test_size=validation_size / (1 - test_size),
+                random_state=random_state,
+                stratify=train_val_labels,
+            )
+        except ValueError as error:
+            self.utils.log(
+                "DataPipeline",
+                LogType.WARNING,
+                f"Stratified split failed, fallback to random split: {error}",
+            )
+            train_val_tokens, test_tokens, train_val_labels, test_labels = (
+                train_test_split(
+                    df["token"],
+                    df[label_column],
+                    test_size=test_size,
+                    random_state=random_state,
+                )
+            )
+
+            train_tokens, val_tokens, train_labels, val_labels = train_test_split(
+                train_val_tokens,
+                train_val_labels,
+                test_size=validation_size / (1 - test_size),
+                random_state=random_state,
+            )
 
         self.utils.log(
             "DataPipeline",
@@ -246,7 +321,33 @@ class DataPipeline:
 
         metadata = {
             "char_vocab_size": len(char_vocab) if char_vocab is not None else None,
+            "dropped_labels": rare_labels,
+            "label_counts": df[label_column].value_counts().to_dict(),
+            "class_weights": None,
         }
+
+        if use_class_weight:
+            train_counts = Counter(train_labels)
+            total_train = len(train_labels)
+            num_classes = len(label2id)
+            class_weights = []
+            for class_id in range(num_classes):
+                label = id2label[class_id]
+                count = train_counts.get(label, 0)
+                weight = (
+                    float(total_train) / float(num_classes * count)
+                    if count > 0
+                    else 0.0
+                )
+                class_weights.append(weight)
+
+            metadata["class_weights"] = torch.tensor(class_weights, dtype=torch.float)
+            metadata["class_weights_list"] = class_weights
+
+        metadata["label_counts_before_filter"] = label_counts_before_filter
+        metadata["train_label_counts"] = dict(Counter(train_labels))
+        metadata["val_label_counts"] = dict(Counter(val_labels))
+        metadata["test_label_counts"] = dict(Counter(test_labels))
 
         return train_dataset, val_dataset, test_dataset, label2id, id2label, metadata
 
