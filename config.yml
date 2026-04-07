@@ -11,12 +11,16 @@ model:
 
 training:
   batch_size: 32
-  num_epochs: 1
+  num_epochs: 4
   learning_rate: 2e-5
   weight_decay: 0.01
   warmup_steps: 200
   max_grad_norm: 1.0
   device: cuda
+  early_stopping_monitor: val_f1_macro
+  early_stopping_mode: max
+  early_stopping_patience: 2
+  enforce_epoch_policy: true
 
 data:
   test_size: 0.2
@@ -45,6 +49,8 @@ experiments:
       architecture: bert_linear
       model_name: indobenchmark/indobert-large-p2
       hidden_size: 1024
+    training:
+      num_epochs: 4
 
   EXP-02:
     experiment:
@@ -56,6 +62,8 @@ experiments:
       model_name: indobenchmark/indobert-large-p2
       hidden_size: 1024
       mlp_hidden_size: 256
+    training:
+      num_epochs: 4
 
   EXP-03:
     experiment:
@@ -66,6 +74,8 @@ experiments:
       architecture: bert_linear
       model_name: cahya/distilbert-base-indonesian
       hidden_size: 768
+    training:
+      num_epochs: 4
 
   EXP-04:
     experiment:
@@ -76,6 +86,8 @@ experiments:
       architecture: bert_linear
       model_name: flax-community/indonesian-roberta-base
       hidden_size: 768
+    training:
+      num_epochs: 4
 
   EXP-05:
     experiment:
@@ -87,6 +99,8 @@ experiments:
       model_name: indobenchmark/indobert-large-p2
       hidden_size: 1024
       gru_hidden_size: 256
+    training:
+      num_epochs: 5
 
   EXP-06:
     experiment:
@@ -98,6 +112,8 @@ experiments:
       model_name: indobenchmark/indobert-large-p2
       hidden_size: 1024
       cnn_out_channels: 128
+    training:
+      num_epochs: 5
 
   EXP-07:
     experiment:
@@ -108,6 +124,8 @@ experiments:
       architecture: char_cnn
       freeze_bert: true
       cnn_out_channels: 128
+    training:
+      num_epochs: 10
 
   EXP-08:
     experiment:
@@ -118,6 +136,8 @@ experiments:
       architecture: char_bilstm
       freeze_bert: true
       lstm_hidden_size: 128
+    training:
+      num_epochs: 10
 
   EXP-09:
     experiment:
@@ -129,6 +149,8 @@ experiments:
       freeze_bert: true
       cnn_out_channels: 128
       lstm_hidden_size: 128
+    training:
+      num_epochs: 12
 
   EXP-10:
     experiment:
@@ -140,6 +162,8 @@ experiments:
       model_name: indobenchmark/indobert-large-p2
       hidden_size: 1024
       cnn_out_channels: 128
+    training:
+      num_epochs: 6
 
   EXP-11:
     experiment:
@@ -151,3 +175,5 @@ experiments:
       model_name: cahya/distilbert-base-indonesian
       hidden_size: 768
       cnn_out_channels: 128
+    training:
+      num_epochs: 6

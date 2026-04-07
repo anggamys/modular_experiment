@@ -48,6 +48,7 @@ class Trainer:
             LogType.INFO,
             f"Device: {self.device} | Path: {self.checkpoint_dir}",
         )
+        self._apply_epoch_policy()
 
     def _resolve_experiment_config(self, raw_config: dict, exp_id: str | None):
         experiments = raw_config.get("experiments", {})
@@ -77,6 +78,36 @@ class Trainer:
             return merged
 
         return raw_config
+
+    def _apply_epoch_policy(self):
+        training_cfg = self.config.get("training", {})
+        if not training_cfg.get("enforce_epoch_policy", True):
+            return
+
+        architecture = str(self.config.get("model", {}).get("architecture", "")).lower()
+        policy = {
+            "bert_linear": (3, 5),
+            "bert_mlp": (3, 5),
+            "bert_gru": (4, 6),
+            "bert_cnn": (4, 6),
+            "char_cnn": (8, 15),
+            "char_bilstm": (8, 15),
+            "char_cnn_bilstm": (10, 20),
+            "hybrid_bert_charcnn": (4, 8),
+        }
+        min_epoch, max_epoch = policy.get(architecture, (3, 5))
+
+        current_epochs = int(training_cfg.get("num_epochs", max_epoch))
+        clamped_epochs = max(min_epoch, min(current_epochs, max_epoch))
+
+        if clamped_epochs != current_epochs:
+            self.utils.log(
+                "Trainer",
+                LogType.WARNING,
+                f"num_epochs={current_epochs} adjusted to {clamped_epochs} for architecture={architecture}",
+            )
+
+        self.config["training"]["num_epochs"] = clamped_epochs
 
     def _set_seed(self, seed: int):
         torch.manual_seed(seed)
@@ -135,8 +166,23 @@ class Trainer:
         amp_enabled = self.device.type == "cuda"
         scaler = GradScaler(enabled=amp_enabled)
 
-        best_val_loss = float("inf")
-        patience = 3
+        early_stopping_monitor = self.config["training"].get(
+            "early_stopping_monitor", "val_loss"
+        )
+        early_stopping_mode = self.config["training"].get(
+            "early_stopping_mode", "min"
+        )
+        patience = int(self.config["training"].get("early_stopping_patience", 2))
+
+        if early_stopping_mode not in {"min", "max"}:
+            self.utils.log(
+                "Trainer",
+                LogType.WARNING,
+                f"Invalid early_stopping_mode={early_stopping_mode}, fallback to 'min'",
+            )
+            early_stopping_mode = "min"
+
+        best_score = float("inf") if early_stopping_mode == "min" else float("-inf")
         patience_counter = 0
 
         results = {
@@ -144,7 +190,8 @@ class Trainer:
             "train_loss": [],
             "val_loss": [],
             "val_accuracy": [],
-            "val_f1": [],
+            "val_f1_weighted": [],
+            "val_f1_macro": [],
         }
 
         for epoch in range(self.config["training"]["num_epochs"]):
@@ -158,16 +205,30 @@ class Trainer:
             results["train_loss"].append(train_loss)
             results["val_loss"].append(val_loss)
             results["val_accuracy"].append(val_metrics["accuracy"])
-            results["val_f1"].append(val_metrics["f1"])
+            results["val_f1_weighted"].append(val_metrics["f1_weighted"])
+            results["val_f1_macro"].append(val_metrics["f1_macro"])
 
             self.utils.log(
                 "Trainer",
                 LogType.INFO,
-                f"Ep {epoch + 1} | Loss: {train_loss:.4f}/{val_loss:.4f} | Acc: {val_metrics['accuracy']:.4f} | F1: {val_metrics['f1']:.4f}",
+                f"Ep {epoch + 1} | Loss: {train_loss:.4f}/{val_loss:.4f} | Acc: {val_metrics['accuracy']:.4f} | F1w: {val_metrics['f1_weighted']:.4f} | F1m: {val_metrics['f1_macro']:.4f}",
             )
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            monitor_candidates = {
+                "val_loss": val_loss,
+                "val_f1_weighted": val_metrics["f1_weighted"],
+                "val_f1_macro": val_metrics["f1_macro"],
+            }
+            current_score = monitor_candidates.get(early_stopping_monitor, val_loss)
+
+            improved = (
+                current_score < best_score
+                if early_stopping_mode == "min"
+                else current_score > best_score
+            )
+
+            if improved:
+                best_score = current_score
                 patience_counter = 0
 
                 ckpt_path = self.checkpoint_dir / f"model_epoch_{epoch + 1}.pt"
@@ -176,7 +237,10 @@ class Trainer:
                         "epoch": epoch + 1,
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
-                        "loss": val_loss,
+                        "monitor": early_stopping_monitor,
+                        "monitor_mode": early_stopping_mode,
+                        "monitor_value": current_score,
+                        "val_loss": val_loss,
                         "label2id": label2id,
                         "id2label": id2label,
                     },
@@ -260,9 +324,16 @@ class Trainer:
                 all_labels.extend(labels.cpu().numpy().tolist())
 
         accuracy = accuracy_score(all_labels, all_predictions)
-        f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
+        f1_weighted = f1_score(
+            all_labels, all_predictions, average="weighted", zero_division=0
+        )
+        f1_macro = f1_score(all_labels, all_predictions, average="macro", zero_division=0)
 
-        return total_loss / len(val_loader), {"accuracy": accuracy, "f1": f1}
+        return total_loss / len(val_loader), {
+            "accuracy": accuracy,
+            "f1_weighted": f1_weighted,
+            "f1_macro": f1_macro,
+        }
 
     def evaluate(self, model, test_dataset, id2label):
         self.utils.log("Trainer", LogType.INFO, "Evaluating...")
@@ -304,7 +375,10 @@ class Trainer:
             all_labels, all_predictions, average="weighted", zero_division=0
         )
 
-        f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
+        f1_weighted = f1_score(
+            all_labels, all_predictions, average="weighted", zero_division=0
+        )
+        f1_macro = f1_score(all_labels, all_predictions, average="macro", zero_division=0)
 
         ordered_labels = [
             id2label.get(i, id2label.get(str(i), str(i))) for i in range(len(id2label))
@@ -322,7 +396,8 @@ class Trainer:
             "accuracy": accuracy,
             "precision": precision,
             "recall": recall,
-            "f1": f1,
+            "f1_weighted": f1_weighted,
+            "f1_macro": f1_macro,
             "classification_report": class_report,
         }
 
