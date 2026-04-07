@@ -56,7 +56,7 @@ class DataPipeline:
         df = self.data.load_data(csv_path)
         self.utils.log("DataPipeline", LogType.INFO, f"Shape: {df.shape}")
 
-        required_columns = {"token", "final_pos_tag"}
+        required_columns = {"token", "label"}
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
             self.utils.log(
@@ -64,9 +64,16 @@ class DataPipeline:
                 LogType.ERROR,
                 f"Missing required columns: {sorted(missing_columns)}",
             )
+
+            self.utils.log(
+                "DataPipeline",
+                LogType.INFO,
+                f"Expected columns: {sorted(required_columns)}, Found columns: {sorted(df.columns)}",
+            )
+
             exit(1)
 
-        labels = df["final_pos_tag"].unique().tolist()
+        labels = df["label"].unique().tolist()
         label2id = self.data.label2id(labels)
         id2label = self.data.id2label(labels)
 
@@ -78,7 +85,7 @@ class DataPipeline:
 
         train_val_tokens, test_tokens, train_val_labels, test_labels = train_test_split(
             df["token"],
-            df["final_pos_tag"],
+            df["label"],
             test_size=test_size,
             random_state=random_state,
         )
