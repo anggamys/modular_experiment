@@ -321,6 +321,7 @@ class DataPipeline:
 
         metadata = {
             "char_vocab_size": len(char_vocab) if char_vocab is not None else None,
+            "char_vocab": char_vocab,
             "dropped_labels": rare_labels,
             "label_counts": df[label_column].value_counts().to_dict(),
             "class_weights": None,

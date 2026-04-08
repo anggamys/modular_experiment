@@ -108,6 +108,7 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
         label2id,
         id2label,
         class_weights=metadata.get("class_weights"),
+        char_vocab=metadata.get("char_vocab"),
     )
     trainer.evaluate(model, test_dataset, id2label)
 

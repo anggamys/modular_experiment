@@ -47,8 +47,9 @@ class Trainer:
         self.checkpoint_dir = save_dir / exp_name
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.utils.has_file_logging():
-            self.utils.log2file(log_dir=str(self.checkpoint_dir))
+        # Always keep an experiment-local log in checkpoint dir.
+        # If --log_file is enabled in main, logs will be mirrored to both files.
+        self.utils.log2file(log_dir=str(self.checkpoint_dir), filename="run.log")
 
         self.utils.log(
             "Trainer",
@@ -106,16 +107,22 @@ class Trainer:
         min_epoch, max_epoch = policy.get(architecture, (3, 5))
 
         current_epochs = int(training_cfg.get("num_epochs", max_epoch))
-        clamped_epochs = max(min_epoch, min(current_epochs, max_epoch))
+        # By default, keep user-defined upper bound and only enforce a minimum.
+        # Set enforce_epoch_policy_cap=true to also enforce architecture max cap.
+        enforce_cap = bool(training_cfg.get("enforce_epoch_policy_cap", False))
+        if enforce_cap:
+            adjusted_epochs = max(min_epoch, min(current_epochs, max_epoch))
+        else:
+            adjusted_epochs = max(min_epoch, current_epochs)
 
-        if clamped_epochs != current_epochs:
+        if adjusted_epochs != current_epochs:
             self.utils.log(
                 "Trainer",
                 LogType.WARNING,
-                f"num_epochs={current_epochs} adjusted to {clamped_epochs} for architecture={architecture}",
+                f"num_epochs={current_epochs} adjusted to {adjusted_epochs} for architecture={architecture}",
             )
 
-        self.config["training"]["num_epochs"] = clamped_epochs
+        self.config["training"]["num_epochs"] = adjusted_epochs
 
     def _apply_learning_rate_policy(self):
         training_cfg = self.config.get("training", {})
@@ -291,6 +298,7 @@ class Trainer:
         label2id,
         id2label,
         class_weights=None,
+        char_vocab=None,
     ):
         self.utils.log("Trainer", LogType.INFO, "Starting training...")
         train_started_at = time.time()
@@ -355,6 +363,16 @@ class Trainer:
                 f"Invalid early_stopping_mode={early_stopping_mode}, fallback to 'min'",
             )
             early_stopping_mode = "min"
+
+        self.utils.log(
+            "Trainer",
+            LogType.INFO,
+            (
+                f"Training setup | epochs={self.config['training']['num_epochs']} "
+                f"| early_stopping_monitor={early_stopping_monitor} "
+                f"| mode={early_stopping_mode} | patience={patience}"
+            ),
+        )
 
         best_score = float("inf") if early_stopping_mode == "min" else float("-inf")
         patience_counter = 0
@@ -422,6 +440,7 @@ class Trainer:
                     "val_loss": val_loss,
                     "label2id": label2id,
                     "id2label": id2label,
+                    "char_vocab": char_vocab,
                 }
                 torch.save(checkpoint_payload, ckpt_path)
                 self.utils.log(
