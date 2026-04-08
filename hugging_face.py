@@ -120,3 +120,9 @@ class HuggingFace:
             exit(1)
 
         return model
+
+    def load_assets(self, model_name: str):
+        model_path = self.huggingface_download(model_name)
+        tokenizer = self.tokenizer(model_path)
+        model = self.model(model_path)
+        return tokenizer, model

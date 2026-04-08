@@ -1,5 +1,7 @@
 import argparse
+import json
 import os
+import warnings
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -102,3 +104,32 @@ class Utils:
         except Exception as e:
             self.log("Utils", LogType.ERROR, f"Failed to enable log file: {e}")
             raise
+
+    def write_json(self, path, payload, ensure_ascii: bool = False):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, ensure_ascii=ensure_ascii)
+        except Exception as e:
+            self.log("Utils", LogType.ERROR, f"Failed to write JSON '{path}': {e}")
+            raise
+
+    def setup_runtime(self):
+        warnings.filterwarnings(
+            "ignore",
+            message="This DataLoader will create .* worker processes.*",
+            category=UserWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*GradScaler.*deprecated.*",
+            category=FutureWarning,
+        )
+
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        try:
+            from huggingface_hub.utils import logging as hf_logging
+
+            hf_logging.set_verbosity_error()
+        except Exception:
+            # Runtime setup should be best effort.
+            pass

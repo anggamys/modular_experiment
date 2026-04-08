@@ -352,6 +352,26 @@ class DataPipeline:
 
         return train_dataset, val_dataset, test_dataset, label2id, id2label, metadata
 
+    def build_label_distribution_report(self, trainer_config, metadata, num_labels: int):
+        return {
+            "experiment": trainer_config.get("experiment", {}),
+            "label_column": trainer_config["data"].get("label_column", "label"),
+            "min_samples_per_label": trainer_config["data"].get(
+                "min_samples_per_label", 0
+            ),
+            "rare_label_strategy": trainer_config["data"].get(
+                "rare_label_strategy", "keep"
+            ),
+            "dropped_labels": metadata.get("dropped_labels", []),
+            "label_counts_before_filter": metadata.get("label_counts_before_filter", {}),
+            "label_counts_after_filter": metadata.get("label_counts", {}),
+            "train_label_counts": metadata.get("train_label_counts", {}),
+            "val_label_counts": metadata.get("val_label_counts", {}),
+            "test_label_counts": metadata.get("test_label_counts", {}),
+            "class_weights": metadata.get("class_weights_list"),
+            "num_labels": num_labels,
+        }
+
 
 class TokenDataset(Dataset):
     def __init__(

@@ -88,6 +88,16 @@ class ModelBuilder:
     def __init__(self):
         self.utils = Utils()
 
+    @staticmethod
+    def uses_transformer(architecture: str) -> bool:
+        return architecture in {
+            "bert_linear",
+            "bert_mlp",
+            "bert_gru",
+            "bert_cnn",
+            "hybrid_bert_charcnn",
+        }
+
     def _build_bert_backbone(self, bert_model, freeze_bert):
         if bert_model is None:
             self.utils.log("ModelBuilder", LogType.ERROR, "BERT model is required.")

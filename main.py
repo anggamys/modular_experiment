@@ -1,9 +1,3 @@
-import json
-import os
-import warnings
-
-from huggingface_hub.utils import logging as hf_logging
-
 from data import DataPipeline
 from hugging_face import HuggingFace
 from model import ModelBuilder
@@ -30,23 +24,15 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
     hugging_face = HuggingFace()
 
     architecture = trainer.config["model"]["architecture"]
-    use_transformer = architecture in {
-        "bert_linear",
-        "bert_mlp",
-        "bert_gru",
-        "bert_cnn",
-        "hybrid_bert_charcnn",
-    }
+    use_transformer = model_builder.uses_transformer(architecture)
 
     tokenizer = None
     bert_model = None
 
     if use_transformer:
-        model_path = hugging_face.huggingface_download(
+        tokenizer, bert_model = hugging_face.load_assets(
             trainer.config["model"]["model_name"]
         )
-        tokenizer = hugging_face.tokenizer(model_path)
-        bert_model = hugging_face.model(model_path)
 
     train_dataset, val_dataset, test_dataset, label2id, id2label, metadata = (
         data_pipeline.prepare_datasets(
@@ -68,25 +54,12 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
     )
 
     label_distribution_path = trainer.checkpoint_dir / "label_distribution.json"
-    label_distribution_report = {
-        "experiment": trainer.config.get("experiment", {}),
-        "label_column": trainer.config["data"].get("label_column", "label"),
-        "min_samples_per_label": trainer.config["data"].get("min_samples_per_label", 0),
-        "rare_label_strategy": trainer.config["data"].get(
-            "rare_label_strategy", "keep"
-        ),
-        "dropped_labels": metadata.get("dropped_labels", []),
-        "label_counts_before_filter": metadata.get("label_counts_before_filter", {}),
-        "label_counts_after_filter": metadata.get("label_counts", {}),
-        "train_label_counts": metadata.get("train_label_counts", {}),
-        "val_label_counts": metadata.get("val_label_counts", {}),
-        "test_label_counts": metadata.get("test_label_counts", {}),
-        "class_weights": metadata.get("class_weights_list"),
-        "num_labels": len(label2id),
-    }
-
-    with open(label_distribution_path, "w", encoding="utf-8") as f:
-        json.dump(label_distribution_report, f, indent=2, ensure_ascii=False)
+    label_distribution_report = data_pipeline.build_label_distribution_report(
+        trainer_config=trainer.config,
+        metadata=metadata,
+        num_labels=len(label2id),
+    )
+    utils.write_json(label_distribution_path, label_distribution_report)
 
     utils.log(
         "Main",
@@ -120,21 +93,9 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
 
 
 def main():
-    warnings.filterwarnings(
-        "ignore",
-        message="This DataLoader will create .* worker processes.*",
-        category=UserWarning,
-    )
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*GradScaler.*deprecated.*",
-        category=FutureWarning,
-    )
-
-    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    hf_logging.set_verbosity_error()
-
     utils = Utils()
+    utils.setup_runtime()
+
     args = utils.argument_parser(
         description="Single-token POS research runner",
         arguments=[

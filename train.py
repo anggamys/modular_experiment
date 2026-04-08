@@ -1,5 +1,6 @@
 import json
 import time
+import csv
 from pathlib import Path
 from typing import Any
 
@@ -290,6 +291,172 @@ class Trainer:
             for key, value in batch.items()
         }
 
+    def _create_dataloaders(self, train_dataset, val_dataset):
+        batch_size = int(self.config["training"]["batch_size"])
+        num_workers = min(2, max(0, len(train_dataset) // max(1, batch_size)))
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=self.device.type == "cuda",
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=self.device.type == "cuda",
+        )
+        return train_loader, val_loader
+
+    def _build_scheduler(self, optimizer, train_loader):
+        total_steps = len(train_loader) * self.config["training"]["num_epochs"]
+        warmup_steps = float(self.config["training"]["warmup_steps"])
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return float(step) / float(max(1, warmup_steps))
+            return max(
+                0.0,
+                float(total_steps - step) / float(max(1, total_steps - warmup_steps)),
+            )
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+    def _resolve_early_stopping_config(self):
+        early_stopping_monitor = self.config["training"].get(
+            "early_stopping_monitor", "val_loss"
+        )
+        early_stopping_mode = self.config["training"].get("early_stopping_mode", "min")
+        patience = int(self.config["training"].get("early_stopping_patience", 2))
+
+        if early_stopping_mode not in {"min", "max"}:
+            self.utils.log(
+                "Trainer",
+                LogType.WARNING,
+                f"Invalid early_stopping_mode={early_stopping_mode}, fallback to 'min'",
+            )
+            early_stopping_mode = "min"
+
+        self.utils.log(
+            "Trainer",
+            LogType.INFO,
+            (
+                f"Training setup | epochs={self.config['training']['num_epochs']} "
+                f"| early_stopping_monitor={early_stopping_monitor} "
+                f"| mode={early_stopping_mode} | patience={patience}"
+            ),
+        )
+        return early_stopping_monitor, early_stopping_mode, patience
+
+    def _init_training_results(self, optimizer_lr_details):
+        return {
+            "epochs": [],
+            "train_loss": [],
+            "val_loss": [],
+            "val_accuracy": [],
+            "val_f1_weighted": [],
+            "val_f1_macro": [],
+            "epoch_train_seconds": [],
+            "optimizer": optimizer_lr_details,
+        }
+
+    def _save_best_checkpoint(
+        self,
+        epoch,
+        model,
+        optimizer,
+        early_stopping_monitor,
+        early_stopping_mode,
+        current_score,
+        val_loss,
+        label2id,
+        id2label,
+        char_vocab,
+    ):
+        checkpoint_payload = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "monitor": early_stopping_monitor,
+            "monitor_mode": early_stopping_mode,
+            "monitor_value": current_score,
+            "val_loss": val_loss,
+            "label2id": label2id,
+            "id2label": id2label,
+            "char_vocab": char_vocab,
+        }
+        best_model_path = self.checkpoint_dir / "best_model.pt"
+        torch.save(checkpoint_payload, best_model_path)
+        self.utils.log(
+            "Trainer",
+            LogType.INFO,
+            f"Updated best: {best_model_path.name} (epoch {epoch})",
+        )
+        return best_model_path.name
+
+    def _save_last_checkpoint(self, epoch, model, optimizer, label2id, id2label, char_vocab):
+        last_payload = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "label2id": label2id,
+            "id2label": id2label,
+            "char_vocab": char_vocab,
+        }
+        last_model_path = self.checkpoint_dir / "last_model.pt"
+        torch.save(last_payload, last_model_path)
+        self.utils.log("Trainer", LogType.INFO, f"Saved last: {last_model_path.name}")
+
+    def _save_training_artifacts(
+        self,
+        results,
+        train_started_at,
+        early_stopping_monitor,
+        early_stopping_mode,
+        best_epoch,
+        best_checkpoint_name,
+        best_score,
+        last_epoch,
+    ):
+        train_finished_at = time.time()
+        total_train_seconds = train_finished_at - train_started_at
+        trained_epochs = len(results["epochs"])
+        avg_epoch_seconds = (
+            total_train_seconds / trained_epochs if trained_epochs > 0 else 0.0
+        )
+
+        results["timing"] = {
+            "train_started_at_unix": train_started_at,
+            "train_finished_at_unix": train_finished_at,
+            "total_train_seconds": total_train_seconds,
+            "avg_epoch_seconds": avg_epoch_seconds,
+        }
+
+        results_path = self.checkpoint_dir / "training_results.json"
+        with open(results_path, "w") as f:
+            json.dump(results, f, indent=2)
+
+        if best_epoch is not None:
+            best_info = {
+                "best_epoch": best_epoch,
+                "best_checkpoint": best_checkpoint_name,
+                "best_alias": "best_model.pt",
+                "last_epoch": last_epoch,
+                "last_checkpoint": "last_model.pt",
+                "monitor": early_stopping_monitor,
+                "monitor_mode": early_stopping_mode,
+                "best_score": best_score,
+            }
+            best_info_path = self.checkpoint_dir / "best_model_info.json"
+            with open(best_info_path, "w") as f:
+                json.dump(best_info, f, indent=2)
+            self.utils.log("Trainer", LogType.INFO, f"Best model info: {best_info_path}")
+
+        self.utils.log("Trainer", LogType.INFO, f"Results: {results_path}")
+
     def train(
         self,
         model,
@@ -314,64 +481,14 @@ class Trainer:
             model.loss_fn = torch.nn.CrossEntropyLoss(weight=weight_tensor)
             self.utils.log("Trainer", LogType.INFO, "Class-weighted loss enabled")
 
-        batch_size = int(self.config["training"]["batch_size"])
-        # Cap workers conservatively to avoid runtime warnings/freezes on limited environments.
-        num_workers = min(2, max(0, len(train_dataset) // max(1, batch_size)))
-
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=self.device.type == "cuda",
-        )
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=self.device.type == "cuda",
-        )
+        train_loader, val_loader = self._create_dataloaders(train_dataset, val_dataset)
 
         optimizer, optimizer_lr_details = self._build_optimizer(model)
-
-        total_steps = len(train_loader) * self.config["training"]["num_epochs"]
-        warmup_steps = float(self.config["training"]["warmup_steps"])
-
-        def lr_lambda(step):
-            if step < warmup_steps:
-                return float(step) / float(max(1, warmup_steps))
-            return max(
-                0.0,
-                float(total_steps - step) / float(max(1, total_steps - warmup_steps)),
-            )
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        scheduler = self._build_scheduler(optimizer, train_loader)
         amp_enabled = self.device.type == "cuda"
         scaler = GradScaler(enabled=amp_enabled)
-
-        early_stopping_monitor = self.config["training"].get(
-            "early_stopping_monitor", "val_loss"
-        )
-        early_stopping_mode = self.config["training"].get("early_stopping_mode", "min")
-        patience = int(self.config["training"].get("early_stopping_patience", 2))
-
-        if early_stopping_mode not in {"min", "max"}:
-            self.utils.log(
-                "Trainer",
-                LogType.WARNING,
-                f"Invalid early_stopping_mode={early_stopping_mode}, fallback to 'min'",
-            )
-            early_stopping_mode = "min"
-
-        self.utils.log(
-            "Trainer",
-            LogType.INFO,
-            (
-                f"Training setup | epochs={self.config['training']['num_epochs']} "
-                f"| early_stopping_monitor={early_stopping_monitor} "
-                f"| mode={early_stopping_mode} | patience={patience}"
-            ),
+        early_stopping_monitor, early_stopping_mode, patience = (
+            self._resolve_early_stopping_config()
         )
 
         best_score = float("inf") if early_stopping_mode == "min" else float("-inf")
@@ -379,16 +496,7 @@ class Trainer:
         best_epoch = None
         best_checkpoint_name = None
 
-        results: dict[str, Any] = {
-            "epochs": [],
-            "train_loss": [],
-            "val_loss": [],
-            "val_accuracy": [],
-            "val_f1_weighted": [],
-            "val_f1_macro": [],
-            "epoch_train_seconds": [],
-            "optimizer": optimizer_lr_details,
-        }
+        results: dict[str, Any] = self._init_training_results(optimizer_lr_details)
 
         for epoch in range(self.config["training"]["num_epochs"]):
             epoch_started_at = time.time()
@@ -429,35 +537,19 @@ class Trainer:
                 best_score = current_score
                 patience_counter = 0
 
-                ckpt_path = self.checkpoint_dir / f"model_epoch_{epoch + 1}.pt"
-                checkpoint_payload = {
-                    "epoch": epoch + 1,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "monitor": early_stopping_monitor,
-                    "monitor_mode": early_stopping_mode,
-                    "monitor_value": current_score,
-                    "val_loss": val_loss,
-                    "label2id": label2id,
-                    "id2label": id2label,
-                    "char_vocab": char_vocab,
-                }
-                torch.save(checkpoint_payload, ckpt_path)
-                self.utils.log(
-                    "Trainer",
-                    LogType.INFO,
-                    f"Saved: {ckpt_path.name}",
+                best_checkpoint_name = self._save_best_checkpoint(
+                    epoch=epoch + 1,
+                    model=model,
+                    optimizer=optimizer,
+                    early_stopping_monitor=early_stopping_monitor,
+                    early_stopping_mode=early_stopping_mode,
+                    current_score=current_score,
+                    val_loss=val_loss,
+                    label2id=label2id,
+                    id2label=id2label,
+                    char_vocab=char_vocab,
                 )
-
-                best_model_path = self.checkpoint_dir / "best_model.pt"
-                torch.save(checkpoint_payload, best_model_path)
                 best_epoch = epoch + 1
-                best_checkpoint_name = ckpt_path.name
-                self.utils.log(
-                    "Trainer",
-                    LogType.INFO,
-                    f"Updated best: {best_model_path.name} <- {ckpt_path.name}",
-                )
             else:
                 patience_counter += 1
 
@@ -469,43 +561,27 @@ class Trainer:
                 )
                 break
 
-        train_finished_at = time.time()
-        total_train_seconds = train_finished_at - train_started_at
-        trained_epochs = len(results["epochs"])
-        avg_epoch_seconds = (
-            total_train_seconds / trained_epochs if trained_epochs > 0 else 0.0
-        )
-
-        results["timing"] = {
-            "train_started_at_unix": train_started_at,
-            "train_finished_at_unix": train_finished_at,
-            "total_train_seconds": total_train_seconds,
-            "avg_epoch_seconds": avg_epoch_seconds,
-        }
-
-        results_path = self.checkpoint_dir / "training_results.json"
-        with open(results_path, "w") as f:
-            json.dump(results, f, indent=2)
-
-        if best_epoch is not None:
-            best_info = {
-                "best_epoch": best_epoch,
-                "best_checkpoint": best_checkpoint_name,
-                "best_alias": "best_model.pt",
-                "monitor": early_stopping_monitor,
-                "monitor_mode": early_stopping_mode,
-                "best_score": best_score,
-            }
-            best_info_path = self.checkpoint_dir / "best_model_info.json"
-            with open(best_info_path, "w") as f:
-                json.dump(best_info, f, indent=2)
-            self.utils.log(
-                "Trainer",
-                LogType.INFO,
-                f"Best model info: {best_info_path}",
+        last_epoch = len(results["epochs"])
+        if last_epoch > 0:
+            self._save_last_checkpoint(
+                epoch=last_epoch,
+                model=model,
+                optimizer=optimizer,
+                label2id=label2id,
+                id2label=id2label,
+                char_vocab=char_vocab,
             )
 
-        self.utils.log("Trainer", LogType.INFO, f"Results: {results_path}")
+        self._save_training_artifacts(
+            results=results,
+            train_started_at=train_started_at,
+            early_stopping_monitor=early_stopping_monitor,
+            early_stopping_mode=early_stopping_mode,
+            best_epoch=best_epoch,
+            best_checkpoint_name=best_checkpoint_name,
+            best_score=best_score,
+            last_epoch=last_epoch,
+        )
 
         return model
 
@@ -578,19 +654,7 @@ class Trainer:
             "f1_macro": f1_macro,
         }
 
-    def evaluate(self, model, test_dataset, id2label):
-        self.utils.log("Trainer", LogType.INFO, "Evaluating...")
-
-        model.eval()
-        batch_size = self.config["training"]["batch_size"]
-        amp_enabled = self.device.type == "cuda"
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            pin_memory=amp_enabled,
-        )
-
+    def _run_eval_inference(self, model, test_loader, amp_enabled):
         all_predictions = []
         all_labels = []
 
@@ -609,15 +673,16 @@ class Trainer:
                 all_predictions.extend(predictions.cpu().numpy().tolist())
                 all_labels.extend(labels.cpu().numpy().tolist())
 
+        return all_labels, all_predictions
+
+    def _build_eval_metrics(self, all_labels, all_predictions, id2label):
         accuracy = accuracy_score(all_labels, all_predictions)
         precision = precision_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
-
         recall = recall_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
-
         f1_weighted = f1_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
@@ -628,24 +693,22 @@ class Trainer:
         ordered_labels = [
             id2label.get(i, id2label.get(str(i), str(i))) for i in range(len(id2label))
         ]
+        label_ids = list(range(len(ordered_labels)))
 
         class_report = classification_report(
             all_labels,
             all_predictions,
-            labels=list(range(len(ordered_labels))),
+            labels=label_ids,
             target_names=ordered_labels,
             zero_division=0,
         )
 
-        label_ids = list(range(len(ordered_labels)))
-        per_precision, per_recall, per_f1, per_support = (
-            precision_recall_fscore_support(
-                all_labels,
-                all_predictions,
-                labels=label_ids,
-                average=None,
-                zero_division=0,
-            )
+        per_precision, per_recall, per_f1, per_support = precision_recall_fscore_support(
+            all_labels,
+            all_predictions,
+            labels=label_ids,
+            average=None,
+            zero_division=0,
         )
 
         per_precision_arr = np.asarray(per_precision, dtype=float)
@@ -682,14 +745,97 @@ class Trainer:
             "per_label": per_label_metrics,
         }
 
+        return eval_results, class_report, ordered_labels
+
+    def _build_prediction_rows(self, all_labels, all_predictions, id2label):
+        prediction_rows = []
+        for index, (true_id, pred_id) in enumerate(zip(all_labels, all_predictions)):
+            true_label = id2label.get(true_id, id2label.get(str(true_id), str(true_id)))
+            pred_label = id2label.get(pred_id, id2label.get(str(pred_id), str(pred_id)))
+            prediction_rows.append(
+                {
+                    "index": index,
+                    "ground_truth_id": int(true_id),
+                    "ground_truth_label": true_label,
+                    "predicted_id": int(pred_id),
+                    "predicted_label": pred_label,
+                    "is_correct": int(true_id == pred_id),
+                }
+            )
+        return prediction_rows
+
+    def _save_prediction_artifacts(
+        self, all_labels, all_predictions, ordered_labels, prediction_rows
+    ):
+        predictions_csv_path = self.checkpoint_dir / "evaluation_predictions.csv"
+        with open(predictions_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "index",
+                    "ground_truth_id",
+                    "ground_truth_label",
+                    "predicted_id",
+                    "predicted_label",
+                    "is_correct",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(prediction_rows)
+
+        predictions_json_path = self.checkpoint_dir / "evaluation_predictions.json"
+        self.utils.write_json(
+            predictions_json_path,
+            {
+                "labels": ordered_labels,
+                "y_true": [int(x) for x in all_labels],
+                "y_pred": [int(x) for x in all_predictions],
+                "rows": prediction_rows,
+            },
+        )
+
+        return predictions_csv_path, predictions_json_path
+
+    def evaluate(self, model, test_dataset, id2label):
+        self.utils.log("Trainer", LogType.INFO, "Evaluating...")
+
+        model.eval()
+        batch_size = self.config["training"]["batch_size"]
+        amp_enabled = self.device.type == "cuda"
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=amp_enabled,
+        )
+
+        all_labels, all_predictions = self._run_eval_inference(
+            model, test_loader, amp_enabled
+        )
+        eval_results, class_report, ordered_labels = self._build_eval_metrics(
+            all_labels, all_predictions, id2label
+        )
+        prediction_rows = self._build_prediction_rows(
+            all_labels, all_predictions, id2label
+        )
+
+        predictions_csv_path, predictions_json_path = self._save_prediction_artifacts(
+            all_labels, all_predictions, ordered_labels, prediction_rows
+        )
+
         eval_path = self.checkpoint_dir / "evaluation_results.json"
-        with open(eval_path, "w") as f:
-            json.dump(eval_results, f, indent=2)
+        self.utils.write_json(eval_path, eval_results)
 
         self.utils.log(
             "Trainer",
             LogType.INFO,
             f"Eval Results:\n{class_report}",
+        )
+        
+        self.utils.log(
+            "Trainer",
+            LogType.INFO,
+            f"Saved prediction artifacts: {predictions_csv_path.name}, {predictions_json_path.name}",
         )
 
         return eval_results
