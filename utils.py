@@ -126,10 +126,15 @@ class Utils:
         )
 
         os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+        os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
         try:
             from huggingface_hub.utils import logging as hf_logging
+            from transformers.utils import logging as tr_logging
 
             hf_logging.set_verbosity_error()
+            tr_logging.set_verbosity_error()
+            tr_logging.disable_progress_bar()
         except Exception:
             # Runtime setup should be best effort.
             pass
