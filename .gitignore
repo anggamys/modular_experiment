@@ -5,6 +5,7 @@ __pycache__/*
 # Hugging Face
 hugging_face
 checkpoints
+logs
 
 # Refactoring
 REFACTORING_COMPLETE.md

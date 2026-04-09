@@ -1,5 +1,0 @@
-# Ignore all files in the logs directory
-*
-
-# Except for .gitignore itself
-!.gitignore
