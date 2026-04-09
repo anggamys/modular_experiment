@@ -6,8 +6,8 @@ import torch
 
 from data import CharVocab
 from hugging_face import HuggingFace
-from model import ModelBuilder
-from train import Trainer
+from model_builder import ModelBuilder
+from train_refactored import Trainer
 from type import LogType
 from utils import Utils
 

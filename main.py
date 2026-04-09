@@ -1,7 +1,7 @@
 from data import DataPipeline
 from hugging_face import HuggingFace
-from model import ModelBuilder
-from train import Trainer
+from model_builder import ModelBuilder
+from train_refactored import Trainer
 from type import LogType
 from utils import Utils
 
@@ -80,7 +80,6 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
         val_dataset,
         label2id,
         id2label,
-        class_weights=metadata.get("class_weights"),
         char_vocab=metadata.get("char_vocab"),
     )
     trainer.evaluate(model, test_dataset, id2label)

@@ -242,7 +242,9 @@ class Trainer:
                 }
 
             head_params = [
-                p for p in model.parameters() if p.requires_grad and id(p) not in bert_param_ids
+                p
+                for p in model.parameters()
+                if p.requires_grad and id(p) not in bert_param_ids
             ]
             param_groups = []
             if bert_params:
@@ -397,7 +399,9 @@ class Trainer:
         )
         return best_model_path.name
 
-    def _save_last_checkpoint(self, epoch, model, optimizer, label2id, id2label, char_vocab):
+    def _save_last_checkpoint(
+        self, epoch, model, optimizer, label2id, id2label, char_vocab
+    ):
         last_payload = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
@@ -453,7 +457,9 @@ class Trainer:
             best_info_path = self.checkpoint_dir / "best_model_info.json"
             with open(best_info_path, "w") as f:
                 json.dump(best_info, f, indent=2)
-            self.utils.log("Trainer", LogType.INFO, f"Best model info: {best_info_path}")
+            self.utils.log(
+                "Trainer", LogType.INFO, f"Best model info: {best_info_path}"
+            )
 
         self.utils.log("Trainer", LogType.INFO, f"Results: {results_path}")
 
@@ -657,14 +663,25 @@ class Trainer:
     def _run_eval_inference(self, model, test_loader, amp_enabled):
         all_predictions = []
         all_labels = []
+        all_tokens = []
 
         with torch.no_grad():
             for batch in tqdm(test_loader, desc="Evaluating", leave=False):
+                # Extract tokens before moving to device (tokens are strings, not tensors)
+                tokens = batch.get("token", [])
+                if isinstance(tokens, list):
+                    all_tokens.extend(tokens)
+                else:
+                    # In case batch collate returns a tensor/string, handle it
+                    all_tokens.extend(tokens if isinstance(tokens, list) else [tokens])
+
                 batch = self._move_batch_to_device(batch)
                 labels = batch["labels"]
 
                 with torch.autocast(device_type=self.device.type, enabled=amp_enabled):
-                    eval_batch = {k: v for k, v in batch.items() if k != "labels"}
+                    eval_batch = {
+                        k: v for k, v in batch.items() if k not in ["labels", "token"]
+                    }
                     outputs = model(**eval_batch)
 
                 logits = outputs["logits"]
@@ -673,7 +690,7 @@ class Trainer:
                 all_predictions.extend(predictions.cpu().numpy().tolist())
                 all_labels.extend(labels.cpu().numpy().tolist())
 
-        return all_labels, all_predictions
+        return all_labels, all_predictions, all_tokens
 
     def _build_eval_metrics(self, all_labels, all_predictions, id2label):
         accuracy = accuracy_score(all_labels, all_predictions)
@@ -703,12 +720,14 @@ class Trainer:
             zero_division=0,
         )
 
-        per_precision, per_recall, per_f1, per_support = precision_recall_fscore_support(
-            all_labels,
-            all_predictions,
-            labels=label_ids,
-            average=None,
-            zero_division=0,
+        per_precision, per_recall, per_f1, per_support = (
+            precision_recall_fscore_support(
+                all_labels,
+                all_predictions,
+                labels=label_ids,
+                average=None,
+                zero_division=0,
+            )
         )
 
         per_precision_arr = np.asarray(per_precision, dtype=float)
@@ -747,14 +766,17 @@ class Trainer:
 
         return eval_results, class_report, ordered_labels
 
-    def _build_prediction_rows(self, all_labels, all_predictions, id2label):
+    def _build_prediction_rows(self, all_labels, all_predictions, all_tokens, id2label):
         prediction_rows = []
-        for index, (true_id, pred_id) in enumerate(zip(all_labels, all_predictions)):
+        for index, (true_id, pred_id, token) in enumerate(
+            zip(all_labels, all_predictions, all_tokens)
+        ):
             true_label = id2label.get(true_id, id2label.get(str(true_id), str(true_id)))
             pred_label = id2label.get(pred_id, id2label.get(str(pred_id), str(pred_id)))
             prediction_rows.append(
                 {
                     "index": index,
+                    "token": str(token) if token is not None else "",
                     "ground_truth_id": int(true_id),
                     "ground_truth_label": true_label,
                     "predicted_id": int(pred_id),
@@ -773,6 +795,7 @@ class Trainer:
                 f,
                 fieldnames=[
                     "index",
+                    "token",
                     "ground_truth_id",
                     "ground_truth_label",
                     "predicted_id",
@@ -809,14 +832,14 @@ class Trainer:
             pin_memory=amp_enabled,
         )
 
-        all_labels, all_predictions = self._run_eval_inference(
+        all_labels, all_predictions, all_tokens = self._run_eval_inference(
             model, test_loader, amp_enabled
         )
         eval_results, class_report, ordered_labels = self._build_eval_metrics(
             all_labels, all_predictions, id2label
         )
         prediction_rows = self._build_prediction_rows(
-            all_labels, all_predictions, id2label
+            all_labels, all_predictions, all_tokens, id2label
         )
 
         predictions_csv_path, predictions_json_path = self._save_prediction_artifacts(
@@ -831,7 +854,7 @@ class Trainer:
             LogType.INFO,
             f"Eval Results:\n{class_report}",
         )
-        
+
         self.utils.log(
             "Trainer",
             LogType.INFO,

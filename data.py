@@ -352,7 +352,9 @@ class DataPipeline:
 
         return train_dataset, val_dataset, test_dataset, label2id, id2label, metadata
 
-    def build_label_distribution_report(self, trainer_config, metadata, num_labels: int):
+    def build_label_distribution_report(
+        self, trainer_config, metadata, num_labels: int
+    ):
         return {
             "experiment": trainer_config.get("experiment", {}),
             "label_column": trainer_config["data"].get("label_column", "label"),
@@ -363,7 +365,9 @@ class DataPipeline:
                 "rare_label_strategy", "keep"
             ),
             "dropped_labels": metadata.get("dropped_labels", []),
-            "label_counts_before_filter": metadata.get("label_counts_before_filter", {}),
+            "label_counts_before_filter": metadata.get(
+                "label_counts_before_filter", {}
+            ),
             "label_counts_after_filter": metadata.get("label_counts", {}),
             "train_label_counts": metadata.get("train_label_counts", {}),
             "val_label_counts": metadata.get("val_label_counts", {}),
@@ -411,6 +415,7 @@ class TokenDataset(Dataset):
                 "token_type_ids", torch.zeros(self.max_length, dtype=torch.long)
             ).squeeze(),
             "labels": torch.tensor(label_id, dtype=torch.long),
+            "token": token,
         }
 
 
@@ -476,6 +481,7 @@ class CharDataset(Dataset):
             "char_ids": char_ids,
             "char_mask": char_mask,
             "labels": torch.tensor(label_id, dtype=torch.long),
+            "token": token,
         }
 
 
@@ -526,4 +532,5 @@ class HybridDataset(Dataset):
             "char_ids": char_ids,
             "char_mask": char_mask,
             "labels": torch.tensor(label_id, dtype=torch.long),
+            "token": token,
         }
