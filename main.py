@@ -74,7 +74,7 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
         char_vocab_size=metadata.get("char_vocab_size"),
     )
 
-    model = trainer.train(
+    trainer.train(
         model,
         train_dataset,
         val_dataset,
@@ -82,7 +82,10 @@ def run_experiment(dataset: str, config_path: str, exp_id: str, log_file: bool):
         id2label,
         char_vocab=metadata.get("char_vocab"),
     )
-    trainer.evaluate(model, test_dataset, id2label)
+
+    # Load best model for evaluation
+    best_model, _ = trainer.load_best_model(model_builder)
+    trainer.evaluate(best_model, test_dataset, id2label)
 
     utils.log(
         "Main",

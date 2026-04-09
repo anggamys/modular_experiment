@@ -359,7 +359,7 @@ class Trainer:
         train_loader, val_loader = self._create_dataloaders(train_dataset, val_dataset)
         optimizer, optimizer_lr_details = self._build_optimizer(model)
         scheduler = self._build_scheduler(optimizer, train_loader)
-        scaler = GradScaler()
+        scaler = GradScaler(enabled=self.device.type == "cuda")
 
         amp_enabled = self.device.type == "cuda"
         monitor, patience = self._resolve_early_stopping_config()
@@ -433,18 +433,6 @@ class Trainer:
                 )
                 break
 
-            # Save checkpoint every epoch
-            self.checkpoint_manager.save_checkpoint(
-                epoch,
-                model,
-                optimizer,
-                monitor_value=best_score,
-                monitor_name=monitor,
-                label2id=label2id,
-                id2label=id2label,
-                char_vocab=char_vocab or {},
-            )
-
         train_end_time = time.time()
         training_results["timing"]["train_finished_at_unix"] = train_end_time
         training_results["timing"]["total_train_seconds"] = (
@@ -455,6 +443,15 @@ class Trainer:
             training_results["timing"]["total_train_seconds"] / num_completed_epochs
             if num_completed_epochs > 0
             else 0
+        )
+
+        # Save last checkpoint
+        self.checkpoint_manager.save_last_checkpoint(
+            model,
+            optimizer,
+            label2id=label2id,
+            id2label=id2label,
+            char_vocab=char_vocab or {},
         )
 
         # Save training results
@@ -469,6 +466,52 @@ class Trainer:
         )
 
         return training_results
+
+    def load_best_model(self, model_builder):
+        """
+        Load best model from checkpoint.
+
+        Args:
+            model_builder: ModelBuilder instance to build model architecture
+
+        Returns:
+            Loaded model in eval mode
+        """
+        best_path = self.checkpoint_dir / "best_model.pt"
+        if not best_path.exists():
+            self.utils.log(
+                "Trainer",
+                LogType.WARNING,
+                f"Best model not found at {best_path}, attempting to use last model",
+            )
+            best_path = self.checkpoint_dir / "last_model.pt"
+
+        checkpoint = self.checkpoint_manager.load_checkpoint(best_path)
+        label2id = checkpoint.get("label2id", {})
+        id2label = {v: k for k, v in label2id.items()}
+        num_labels = len(label2id)
+        char_vocab = checkpoint.get("char_vocab", {})
+
+        # Rebuild model architecture
+        model = model_builder.build_model(
+            config_model=self.config["model"],
+            num_labels=num_labels,
+            bert_model=None,
+            char_vocab_size=len(char_vocab),
+        )
+
+        # Load state dict
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.to(self.device)
+        model.eval()
+
+        self.utils.log(
+            "Trainer",
+            LogType.INFO,
+            f"Best model loaded from {best_path.name}",
+        )
+
+        return model, id2label
 
     def evaluate(self, model, test_dataset, id2label: dict):
         """

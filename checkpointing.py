@@ -128,6 +128,48 @@ class CheckpointManager:
         )
         return best_path
 
+    def save_last_checkpoint(
+        self,
+        model,
+        optimizer,
+        label2id: Optional[dict] = None,
+        id2label: Optional[dict] = None,
+        char_vocab: Optional[dict] = None,
+    ) -> Path:
+        """
+        Save last model checkpoint as 'last_model.pt'.
+
+        Args:
+            model: PyTorch model
+            optimizer: Optimizer
+            label2id: Label to ID mapping
+            id2label: ID to label mapping
+            char_vocab: Character vocabulary
+
+        Returns:
+            Path to last_model.pt
+        """
+        last_path = self.checkpoint_dir / "last_model.pt"
+
+        import torch
+
+        checkpoint = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "label2id": label2id or {},
+            "id2label": id2label or {},
+            "char_vocab": char_vocab or {},
+        }
+
+        torch.save(checkpoint, last_path)
+
+        self.utils.log(
+            "CheckpointManager",
+            LogType.INFO,
+            f"Last model saved: {last_path.name}",
+        )
+        return last_path
+
     def save_training_results(
         self,
         results: dict,
