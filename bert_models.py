@@ -1,7 +1,3 @@
-"""
-BERT-based classifier architectures.
-"""
-
 import torch
 import torch.nn as nn
 from transformers import PreTrainedModel
@@ -11,10 +7,9 @@ from type import LogType
 
 
 class BertLinearClassifier(BaseClassifier):
-    """Simple linear classification on top of BERT pooled output."""
-
     def __init__(self, model: PreTrainedModel, num_labels: int, hidden_size: int = 768):
         super().__init__(num_labels=num_labels)
+
         self.bert = model
         self.hidden_size = infer_bert_hidden_size(model, hidden_size)
 
@@ -50,11 +45,11 @@ class BertLinearClassifier(BaseClassifier):
         return self._with_loss(logits, labels)
 
     def freeze_bert_encoder(self, freeze: bool = True):
-        """Freeze or unfreeze BERT encoder parameters."""
         for param in self.bert.parameters():
             param.requires_grad = not freeze
 
         status = "frozen" if freeze else "unfrozen"
+
         self.utils.log(
             "BertLinearClassifier",
             LogType.INFO,
@@ -62,13 +57,10 @@ class BertLinearClassifier(BaseClassifier):
         )
 
     def unfreeze_bert_encoder(self):
-        """Unfreeze BERT encoder parameters."""
         self.freeze_bert_encoder(False)
 
 
 class BertMLPClassifier(BaseClassifier):
-    """MLP layers on top of BERT pooled output."""
-
     def __init__(
         self,
         model: PreTrainedModel,
@@ -77,6 +69,7 @@ class BertMLPClassifier(BaseClassifier):
         mlp_hidden_size: int = 256,
     ):
         super().__init__(num_labels=num_labels)
+
         self.bert = model
         hidden_size = infer_bert_hidden_size(model, hidden_size)
         self.dropout = nn.Dropout(0.1)
@@ -104,12 +97,11 @@ class BertMLPClassifier(BaseClassifier):
 
         pooled_output = self.dropout(bert_output.last_hidden_state[:, 0, :])
         logits = self.classifier(pooled_output)
+
         return self._with_loss(logits, labels)
 
 
 class BertGRUClassifier(BaseClassifier):
-    """BiGRU on top of BERT sequence output."""
-
     def __init__(
         self,
         model: PreTrainedModel,
@@ -118,6 +110,7 @@ class BertGRUClassifier(BaseClassifier):
         gru_hidden_size: int = 256,
     ):
         super().__init__(num_labels=num_labels)
+
         self.bert = model
         hidden_size = infer_bert_hidden_size(model, hidden_size)
         self.gru = nn.GRU(
@@ -149,12 +142,11 @@ class BertGRUClassifier(BaseClassifier):
         hidden = torch.cat((hidden[-2], hidden[-1]), dim=1)
         hidden = self.dropout(hidden)
         logits = self.classifier(hidden)
+
         return self._with_loss(logits, labels)
 
 
 class BertCNNClassifier(BaseClassifier):
-    """1D CNN on top of BERT sequence output."""
-
     def __init__(
         self,
         model: PreTrainedModel,
@@ -163,6 +155,7 @@ class BertCNNClassifier(BaseClassifier):
         cnn_out_channels: int = 128,
     ):
         super().__init__(num_labels=num_labels)
+
         self.bert = model
         hidden_size = infer_bert_hidden_size(model, hidden_size)
         self.conv = nn.Conv1d(hidden_size, cnn_out_channels, kernel_size=3, padding=1)
@@ -190,4 +183,5 @@ class BertCNNClassifier(BaseClassifier):
         pooled = self.pool(cnn_features).squeeze(-1)
         pooled = self.dropout(pooled)
         logits = self.classifier(pooled)
+
         return self._with_loss(logits, labels)

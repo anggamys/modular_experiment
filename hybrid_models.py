@@ -1,7 +1,3 @@
-"""
-Hybrid classifier architectures combining BERT and character-level features.
-"""
-
 import torch
 import torch.nn as nn
 from transformers import PreTrainedModel
@@ -11,8 +7,6 @@ from model_base import BaseClassifier, infer_bert_hidden_size
 
 
 class HybridBertCharCNNClassifier(BaseClassifier):
-    """Hybrid model combining BERT and Character-level CNN."""
-
     def __init__(
         self,
         bert_model: PreTrainedModel,
@@ -23,14 +17,17 @@ class HybridBertCharCNNClassifier(BaseClassifier):
         cnn_out_channels: int = 128,
     ):
         super().__init__(num_labels=num_labels)
+
         self.bert = bert_model
         hidden_size = infer_bert_hidden_size(bert_model, hidden_size)
+
         self.char_encoder = CharCNNClassifier(
             num_labels=num_labels,
             char_vocab_size=char_vocab_size,
             char_embedding_dim=char_embedding_dim,
             cnn_out_channels=cnn_out_channels,
         )
+
         self.dropout = nn.Dropout(0.1)
         self.classifier = nn.Linear(hidden_size + cnn_out_channels, num_labels)
 
@@ -49,9 +46,11 @@ class HybridBertCharCNNClassifier(BaseClassifier):
             token_type_ids=token_type_ids,
             return_dict=True,
         )
+
         bert_pooled = bert_output.last_hidden_state[:, 0, :]
         char_features = self.char_encoder.extract_char_features(char_ids)
         features = torch.cat([bert_pooled, char_features], dim=1)
         features = self.dropout(features)
         logits = self.classifier(features)
+
         return self._with_loss(logits, labels)

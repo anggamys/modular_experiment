@@ -1,9 +1,3 @@
-"""
-Evaluation and metrics module.
-
-Handles model evaluation, metric computation, and prediction artifacts.
-"""
-
 import csv
 from pathlib import Path
 from typing import Tuple, cast
@@ -25,8 +19,6 @@ from utils import Utils
 
 
 class Evaluator:
-    """Handles model evaluation and metric computation."""
-
     def __init__(self, checkpoint_dir: Path, utils: Utils, device: torch.device):
         self.checkpoint_dir = checkpoint_dir
         self.utils = utils
@@ -35,17 +27,6 @@ class Evaluator:
     def run_inference(
         self, model, test_loader, amp_enabled: bool = False
     ) -> Tuple[list, list, list]:
-        """
-        Run inference on test data.
-
-        Args:
-            model: PyTorch model in eval mode
-            test_loader: DataLoader for test data
-            amp_enabled: Whether to use automatic mixed precision
-
-        Returns:
-            Tuple of (all_labels, all_predictions, all_tokens)
-        """
         all_predictions = []
         all_labels = []
         all_tokens = []
@@ -66,6 +47,7 @@ class Evaluator:
                     eval_batch = {
                         k: v for k, v in batch.items() if k not in ["labels", "token"]
                     }
+
                     outputs = model(**eval_batch)
 
                 logits = outputs["logits"]
@@ -79,27 +61,19 @@ class Evaluator:
     def compute_metrics(
         self, all_labels: list, all_predictions: list, id2label: dict
     ) -> Tuple[dict, str, list]:
-        """
-        Compute evaluation metrics.
-
-        Args:
-            all_labels: Ground truth labels
-            all_predictions: Predicted labels
-            id2label: Mapping from label ID to label name
-
-        Returns:
-            Tuple of (eval_results_dict, class_report_str, ordered_labels_list)
-        """
         accuracy = accuracy_score(all_labels, all_predictions)
         precision = precision_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
+
         recall = recall_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
+
         f1_weighted = f1_score(
             all_labels, all_predictions, average="weighted", zero_division=0
         )
+
         f1_macro = f1_score(
             all_labels, all_predictions, average="macro", zero_division=0
         )
@@ -107,6 +81,7 @@ class Evaluator:
         ordered_labels = [
             id2label.get(i, id2label.get(str(i), str(i))) for i in range(len(id2label))
         ]
+
         label_ids = list(range(len(ordered_labels)))
 
         class_report = cast(
@@ -134,6 +109,7 @@ class Evaluator:
         per_precision_arr = np.asarray(per_precision, dtype=float)
         per_recall_arr = np.asarray(per_recall, dtype=float)
         per_f1_arr = np.asarray(per_f1, dtype=float)
+
         if per_support is None:
             per_support_arr = np.zeros(len(label_ids), dtype=int)
         else:
@@ -170,18 +146,6 @@ class Evaluator:
     def build_prediction_rows(
         self, all_labels: list, all_predictions: list, all_tokens: list, id2label: dict
     ) -> list:
-        """
-        Build prediction rows for artifacts.
-
-        Args:
-            all_labels: Ground truth label IDs
-            all_predictions: Predicted label IDs
-            all_tokens: Token text values
-            id2label: Mapping from label ID to label name
-
-        Returns:
-            List of prediction row dicts
-        """
         prediction_rows = []
         for index, (true_id, pred_id, token) in enumerate(
             zip(all_labels, all_predictions, all_tokens)
@@ -199,6 +163,7 @@ class Evaluator:
                     "is_correct": int(true_id == pred_id),
                 }
             )
+
         return prediction_rows
 
     def save_prediction_artifacts(
@@ -208,18 +173,6 @@ class Evaluator:
         all_predictions: list,
         ordered_labels: list,
     ) -> Tuple[Path, Path]:
-        """
-        Save prediction artifacts as CSV and JSON.
-
-        Args:
-            prediction_rows: List of prediction row dicts
-            all_labels: Ground truth label IDs
-            all_predictions: Predicted label IDs
-            ordered_labels: Ordered list of label names
-
-        Returns:
-            Tuple of (csv_path, json_path)
-        """
         # CSV output
         predictions_csv_path = self.checkpoint_dir / "evaluation_predictions.csv"
         with open(predictions_csv_path, "w", newline="", encoding="utf-8") as f:
@@ -259,7 +212,6 @@ class Evaluator:
         return predictions_csv_path, predictions_json_path
 
     def _move_batch_to_device(self, batch: dict) -> dict:
-        """Move batch tensors to device."""
         return {
             k: v.to(self.device) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()

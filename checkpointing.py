@@ -1,9 +1,4 @@
-"""
-Checkpoint and artifact management module.
-
-Handles saving/loading checkpoints, best model tracking, and result artifacts.
-"""
-
+import torch
 from pathlib import Path
 from typing import Optional
 
@@ -12,8 +7,6 @@ from utils import Utils
 
 
 class CheckpointManager:
-    """Manages model checkpoints and training artifacts."""
-
     def __init__(self, checkpoint_dir: Path, utils: Utils):
         self.checkpoint_dir = checkpoint_dir
         self.utils = utils
@@ -30,22 +23,6 @@ class CheckpointManager:
         id2label: Optional[dict] = None,
         char_vocab: Optional[dict] = None,
     ) -> Path:
-        """
-        Save model checkpoint.
-
-        Args:
-            epoch: Current epoch number
-            model: PyTorch model
-            optimizer: Optimizer
-            monitor_value: Value of monitored metric
-            monitor_name: Name of monitored metric
-            label2id: Label to ID mapping
-            id2label: ID to label mapping
-            char_vocab: Character vocabulary (if applicable)
-
-        Returns:
-            Path to saved checkpoint
-        """
         checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch}.pt"
 
         checkpoint = {
@@ -58,8 +35,6 @@ class CheckpointManager:
             "id2label": id2label or {},
             "char_vocab": char_vocab or {},
         }
-
-        import torch
 
         torch.save(checkpoint, checkpoint_path)
 
@@ -80,25 +55,8 @@ class CheckpointManager:
         id2label: Optional[dict] = None,
         char_vocab: Optional[dict] = None,
     ) -> Path:
-        """
-        Save best model checkpoint as 'best_model.pt' and metadata.
-
-        Args:
-            model: PyTorch model
-            optimizer: Optimizer
-            monitor_value: Value of monitored metric
-            monitor_name: Name of monitored metric
-            label2id: Label to ID mapping
-            id2label: ID to label mapping
-            char_vocab: Character vocabulary
-
-        Returns:
-            Path to best_model.pt
-        """
         best_path = self.checkpoint_dir / "best_model.pt"
         info_path = self.checkpoint_dir / "best_model_info.json"
-
-        import torch
 
         checkpoint = {
             "model_state_dict": model.state_dict(),
@@ -126,6 +84,7 @@ class CheckpointManager:
             LogType.INFO,
             f"Best model saved: {best_path.name} (monitor={monitor_name}, value={monitor_value})",
         )
+
         return best_path
 
     def save_last_checkpoint(
@@ -136,22 +95,7 @@ class CheckpointManager:
         id2label: Optional[dict] = None,
         char_vocab: Optional[dict] = None,
     ) -> Path:
-        """
-        Save last model checkpoint as 'last_model.pt'.
-
-        Args:
-            model: PyTorch model
-            optimizer: Optimizer
-            label2id: Label to ID mapping
-            id2label: ID to label mapping
-            char_vocab: Character vocabulary
-
-        Returns:
-            Path to last_model.pt
-        """
         last_path = self.checkpoint_dir / "last_model.pt"
-
-        import torch
 
         checkpoint = {
             "model_state_dict": model.state_dict(),
@@ -168,6 +112,7 @@ class CheckpointManager:
             LogType.INFO,
             f"Last model saved: {last_path.name}",
         )
+
         return last_path
 
     def save_training_results(
@@ -176,17 +121,6 @@ class CheckpointManager:
         label2id: dict,
         id2label: dict,
     ) -> Path:
-        """
-        Save training results as JSON.
-
-        Args:
-            results: Training results dict
-            label2id: Label to ID mapping
-            id2label: ID to label mapping
-
-        Returns:
-            Path to results file
-        """
         results_path = self.checkpoint_dir / "training_results.json"
 
         results_with_labels = {
@@ -202,18 +136,10 @@ class CheckpointManager:
             LogType.INFO,
             f"Training results saved: {results_path.name}",
         )
+
         return results_path
 
     def save_evaluation_results(self, eval_results: dict) -> Path:
-        """
-        Save evaluation results as JSON.
-
-        Args:
-            eval_results: Evaluation results dict
-
-        Returns:
-            Path to evaluation results file
-        """
         eval_path = self.checkpoint_dir / "evaluation_results.json"
         self.utils.write_json(eval_path, eval_results)
 
@@ -222,24 +148,15 @@ class CheckpointManager:
             LogType.INFO,
             f"Evaluation results saved: {eval_path.name}",
         )
+
         return eval_path
 
     def load_checkpoint(self, checkpoint_path: Path) -> dict:
-        """
-        Load checkpoint from file.
-
-        Args:
-            checkpoint_path: Path to checkpoint
-
-        Returns:
-            Loaded checkpoint dict
-        """
-        import torch
-
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
         self.utils.log(
             "CheckpointManager",
             LogType.INFO,
             f"Checkpoint loaded: {checkpoint_path.name}",
         )
+
         return checkpoint

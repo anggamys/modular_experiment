@@ -1,17 +1,8 @@
-"""
-Training policy enforcement module.
-
-Handles epoch policies and learning rate policies to ensure
-training configurations are realistic per architecture.
-"""
-
 from type import LogType
 from utils import Utils
 
 
 class TrainingPolicyManager:
-    """Manages training policies (epochs, learning rates) per architecture."""
-
     EPOCH_POLICY = {
         "bert_linear": (3, 5),
         "bert_mlp": (3, 5),
@@ -36,16 +27,6 @@ class TrainingPolicyManager:
         self.utils = Utils()
 
     def apply_epoch_policy(self, config: dict, enforce_cap: bool = False) -> dict:
-        """
-        Enforce epoch policy based on architecture.
-
-        Args:
-            config: Training config dict
-            enforce_cap: If True, also enforce max epoch cap
-
-        Returns:
-            Updated config dict
-        """
         training_cfg = config.get("training", {})
         if not training_cfg.get("enforce_epoch_policy", True):
             return config
@@ -71,15 +52,6 @@ class TrainingPolicyManager:
         return config
 
     def apply_learning_rate_policy(self, config: dict) -> dict:
-        """
-        Enforce learning rate policy based on architecture.
-
-        Args:
-            config: Training config dict
-
-        Returns:
-            Updated config dict with recommended LR
-        """
         training_cfg = config.get("training", {})
         if not training_cfg.get("enforce_learning_rate_policy", True):
             return config
@@ -108,7 +80,6 @@ class TrainingPolicyManager:
         return config
 
     def _compute_recommended_lr(self, architecture: str, model_name: str) -> float:
-        """Compute recommended learning rate for given architecture."""
         if architecture.startswith("char_"):
             return self.LR_POLICY.get(architecture, self.LR_POLICY["_default_char"])
 

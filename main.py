@@ -1,7 +1,7 @@
 from data import DataPipeline
 from hugging_face import HuggingFace
 from model_builder import ModelBuilder
-from train_refactored import Trainer
+from train import Trainer
 from type import LogType
 from utils import Utils
 
