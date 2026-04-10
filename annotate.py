@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -346,7 +345,7 @@ def main():
             },
             {
                 "name": "--output",
-                "help": "Optional JSON output file path",
+                "help": "Output file path (default: {exp_id}_annotations.csv in logs/annotations/)",
                 "type": str,
                 "required": False,
             },
@@ -462,44 +461,46 @@ def main():
                     f"{status} {row['token']} -> {row['final_label']} (pred={row['predicted_label']}, conf={row['confidence']:.4f})",
                 )
 
+        # Determine output path: default to CSV in logs/annotations/ if not specified
         if args.output:
             output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            # Default: save to logs/annotations/{exp_id}_annotations.csv
+            output_path = Path("logs/annotations") / f"{args.exp_id}_annotations.csv"
 
-            if output_path.suffix.lower() == ".csv":
-                if source_rows is not None:
-                    annotated = source_rows.copy()
-                    token_column = args.token_column
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    # Use pandas merge instead of lambda maps (much faster for large datasets)
-                    results_df = pd.DataFrame(results)
-                    results_df = results_df.rename(columns={"token": token_column})
+        # Always save as CSV (default format)
+        if output_path.suffix.lower() == ".csv" or True:
+            if source_rows is not None:
+                annotated = source_rows.copy()
+                token_column = args.token_column
 
-                    # Merge on token column
-                    annotated = annotated.merge(
-                        results_df[
-                            [
-                                token_column,
-                                "predicted_label",
-                                "predicted_label_id",
-                                "confidence",
-                                "passes_threshold",
-                                "final_label",
-                            ]
-                        ],
-                        on=token_column,
-                        how="left",
-                    )
+                # Use pandas merge instead of lambda maps (much faster for large datasets)
+                results_df = pd.DataFrame(results)
+                results_df = results_df.rename(columns={"token": token_column})
 
-                    annotated.to_csv(output_path, index=False)
-                else:
-                    pd.DataFrame(results).to_csv(output_path, index=False)
+                # Merge on token column
+                annotated = annotated.merge(
+                    results_df[
+                        [
+                            token_column,
+                            "predicted_label",
+                            "predicted_label_id",
+                            "confidence",
+                            "passes_threshold",
+                            "final_label",
+                        ]
+                    ],
+                    on=token_column,
+                    how="left",
+                )
 
+                annotated.to_csv(output_path, index=False)
             else:
-                with open(output_path, "w", encoding="utf-8") as f:
-                    json.dump(results, f, indent=2, ensure_ascii=False)
+                pd.DataFrame(results).to_csv(output_path, index=False)
 
-            utils.log("Annotate", LogType.INFO, f"Saved output: {output_path}")
+        utils.log("Annotate", LogType.INFO, f"Saved output: {output_path}")
 
     except Exception as error:
         utils.log("Annotate", LogType.ERROR, f"Annotation failed: {error}")

@@ -1,6 +1,8 @@
 from pathlib import Path
 from typing import Optional
 
+from google.colab import userdata
+
 from huggingface_hub import snapshot_download
 from transformers import (
     AutoModel,
@@ -16,6 +18,24 @@ from utils import Utils
 class HuggingFace:
     def __init__(self):
         self.utils = Utils()
+
+        token = userdata.get("HF_TOKEN", None)
+        if token:
+            self.utils.log(
+                "HuggingFace",
+                LogType.INFO,
+                "Using Hugging Face token from userdata.",
+            )
+            self.token = token
+        else:
+            self.utils.log(
+                "HuggingFace",
+                LogType.WARNING,
+                "No Hugging Face token found in userdata. "
+                "Proceeding without authentication.",
+            )
+
+            self.token = None
 
     def _resolve_local_dir(self, model_name: str, local_dir: Optional[str]) -> str:
         if local_dir is None:
@@ -57,7 +77,7 @@ class HuggingFace:
         self.utils.create_dir(local_dir)
 
         try:
-            snapshot_download(repo_id=model_name, local_dir=local_dir)
+            snapshot_download(repo_id=model_name, local_dir=local_dir, token=self.token)
         except Exception as error:
             self.utils.log(
                 "HuggingFace",
