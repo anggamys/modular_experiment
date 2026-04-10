@@ -140,6 +140,8 @@ def annotate_tokens(
     exp_id: str,
     checkpoint_name: str | None = None,
     confidence_threshold: float = 0.0,
+    progress_callback=None,
+    batch_size: int = 32,
 ):
     assets = _prepare_model_and_assets(config_path, exp_id, checkpoint_name)
     trainer = assets["trainer"]
@@ -153,65 +155,141 @@ def annotate_tokens(
     char_max_length = int(trainer.config["data"].get("char_max_length", 32))
 
     outputs = []
+    total_tokens = len(tokens)
+    processed_count = 0
 
     with torch.no_grad():
-        for token in tokens:
-            token = str(token).strip()
-            if token == "":
+        # Process tokens in batches
+        for batch_start in range(0, len(tokens), batch_size):
+            batch_end = min(batch_start + batch_size, len(tokens))
+            batch_tokens = tokens[batch_start:batch_end]
+            batch_tokens = [str(t).strip() for t in batch_tokens if str(t).strip()]
+
+            if not batch_tokens:
                 continue
 
-            batch = {}
+            # Prepare batch inputs
+            batch_inputs = {}
             if architecture in {
                 "bert_linear",
                 "bert_mlp",
                 "bert_gru",
                 "bert_cnn",
             }:
-                batch.update(_build_token_batch(token, tokenizer, max_length))
+                # Batch encode tokens
+                encoded = tokenizer(
+                    batch_tokens,
+                    max_length=max_length,
+                    padding="max_length",
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                batch_inputs["input_ids"] = encoded["input_ids"]
+                batch_inputs["attention_mask"] = encoded["attention_mask"]
+                batch_inputs["token_type_ids"] = encoded.get(
+                    "token_type_ids",
+                    torch.zeros((len(batch_tokens), max_length), dtype=torch.long),
+                )
 
             elif architecture in {"char_cnn", "char_bilstm", "char_cnn_bilstm"}:
-                batch.update(_build_char_batch(token, char_vocab, char_max_length))
+                char_ids_list = []
+                char_mask_list = []
+                for token in batch_tokens:
+                    char_ids, char_mask = CharVocab.encode(
+                        token, char_vocab, char_max_length
+                    )
+                    char_ids_list.append(char_ids)
+                    char_mask_list.append(char_mask)
+                batch_inputs["char_ids"] = torch.stack(char_ids_list)
+                batch_inputs["char_mask"] = torch.stack(char_mask_list)
 
             elif architecture == "hybrid_bert_charcnn":
-                batch.update(_build_token_batch(token, tokenizer, max_length))
-                batch.update(_build_char_batch(token, char_vocab, char_max_length))
+                # BERT inputs
+                encoded = tokenizer(
+                    batch_tokens,
+                    max_length=max_length,
+                    padding="max_length",
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                batch_inputs["input_ids"] = encoded["input_ids"]
+                batch_inputs["attention_mask"] = encoded["attention_mask"]
+                batch_inputs["token_type_ids"] = encoded.get(
+                    "token_type_ids",
+                    torch.zeros((len(batch_tokens), max_length), dtype=torch.long),
+                )
+                # Char inputs
+                char_ids_list = []
+                char_mask_list = []
+                for token in batch_tokens:
+                    char_ids, char_mask = CharVocab.encode(
+                        token, char_vocab, char_max_length
+                    )
+                    char_ids_list.append(char_ids)
+                    char_mask_list.append(char_mask)
+                batch_inputs["char_ids"] = torch.stack(char_ids_list)
+                batch_inputs["char_mask"] = torch.stack(char_mask_list)
 
             else:
                 raise RuntimeError(
                     f"Unsupported architecture for annotation: {architecture}"
                 )
 
-            batch = {
+            # Move batch to device
+            batch_inputs = {
                 key: value.to(trainer.device) if torch.is_tensor(value) else value
-                for key, value in batch.items()
+                for key, value in batch_inputs.items()
             }
 
+            # Run inference
             with torch.autocast(
                 device_type=trainer.device.type,
                 enabled=trainer.device.type == "cuda",
             ):
-                model_out = model(**batch)
+                model_out = model(**batch_inputs)
 
             logits = model_out["logits"]
             probs = torch.softmax(logits, dim=-1)
-            pred_idx = int(torch.argmax(probs, dim=-1).item())
-            confidence = float(probs[0, pred_idx].item())
-            label = id2label.get(pred_idx, str(pred_idx))
+            pred_indices = torch.argmax(probs, dim=-1).cpu().numpy()
+            confidences = probs.max(dim=-1).values.cpu().numpy()
 
-            # Determine final label based on confidence threshold
-            is_confident = confidence >= confidence_threshold
-            final_label = label if is_confident else "UNID"
+            # Process results for this batch
+            for token, pred_idx, confidence in zip(
+                batch_tokens, pred_indices, confidences
+            ):
+                processed_count += 1
+                pred_idx = int(pred_idx)
+                confidence = float(confidence)
+                label = id2label.get(pred_idx, str(pred_idx))
 
-            outputs.append(
-                {
-                    "token": token,
-                    "predicted_label": label,
-                    "predicted_label_id": pred_idx,
-                    "confidence": confidence,
-                    "passes_threshold": is_confident,
-                    "final_label": final_label,
-                }
-            )
+                # Determine final label based on confidence threshold
+                is_confident = confidence >= confidence_threshold
+                final_label = label if is_confident else "UNID"
+
+                outputs.append(
+                    {
+                        "token": token,
+                        "predicted_label": label,
+                        "predicted_label_id": pred_idx,
+                        "confidence": confidence,
+                        "passes_threshold": is_confident,
+                        "final_label": final_label,
+                    }
+                )
+
+                # Call progress callback if provided
+                if progress_callback:
+                    progress_callback(
+                        current=processed_count,
+                        total=total_tokens,
+                        token=token,
+                        label=final_label,
+                        confidence=confidence,
+                    )
+
+            # Clear GPU memory between batches
+            if trainer.device.type == "cuda":
+                torch.cuda.empty_cache()
 
     return outputs, assets["checkpoint_path"]
 
@@ -334,6 +412,19 @@ def main():
         utils.log("Annotate", LogType.ERROR, "No valid tokens found to annotate.")
         return
 
+    def progress_callback(current, total, token, label, confidence):
+        """Callback to log annotation progress at intervals (avoid spam for large datasets)"""
+        # Log every 1000 tokens or every 5% progress, whichever is more frequent
+        interval = max(1000, int(total * 0.05))
+
+        if current % interval == 0 or current == total:
+            percentage = (current / total) * 100
+            utils.log(
+                "Annotate",
+                LogType.INFO,
+                f"[{current}/{total} {percentage:5.1f}%] Processing...",
+            )
+
     try:
         results, checkpoint_path = annotate_tokens(
             tokens=tokens,
@@ -341,6 +432,8 @@ def main():
             exp_id=args.exp_id,
             checkpoint_name=args.checkpoint_name,
             confidence_threshold=confidence_threshold,
+            progress_callback=progress_callback if has_csv_arg else None,
+            batch_size=64 if has_csv_arg else 1,
         )
 
         utils.log("Annotate", LogType.INFO, f"Using checkpoint: {checkpoint_path}")
@@ -350,13 +443,24 @@ def main():
             f"Confidence threshold: {confidence_threshold:.4f}",
         )
 
-        for row in results:
-            status = "✓" if row["passes_threshold"] else "✗"
-            utils.log(
-                "Annotate",
-                LogType.INFO,
-                f"{status} {row['token']} -> {row['final_label']} (pred={row['predicted_label']}, conf={row['confidence']:.4f})",
-            )
+        # Summary logging
+        passed_count = sum(1 for row in results if row["passes_threshold"])
+        unid_count = len(results) - passed_count
+        utils.log(
+            "Annotate",
+            LogType.INFO,
+            f"Annotation completed: {len(results)} total, {passed_count} passed threshold, {unid_count} UNID",
+        )
+
+        # If processing CSV without progress callback, show individual results
+        if not has_csv_arg:
+            for row in results:
+                status = "✓" if row["passes_threshold"] else "✗"
+                utils.log(
+                    "Annotate",
+                    LogType.INFO,
+                    f"{status} {row['token']} -> {row['final_label']} (pred={row['predicted_label']}, conf={row['confidence']:.4f})",
+                )
 
         if args.output:
             output_path = Path(args.output)
@@ -366,45 +470,25 @@ def main():
                 if source_rows is not None:
                     annotated = source_rows.copy()
                     token_column = args.token_column
-                    pred_map = {row["token"]: row for row in results}
-                    annotated["predicted_label"] = (
-                        annotated[token_column]
-                        .astype(str)
-                        .map(
-                            lambda x: pred_map.get(x.strip(), {}).get("predicted_label")
-                        )
-                    )
 
-                    annotated["predicted_label_id"] = (
-                        annotated[token_column]
-                        .astype(str)
-                        .map(
-                            lambda x: pred_map.get(x.strip(), {}).get(
-                                "predicted_label_id"
-                            )
-                        )
-                    )
+                    # Use pandas merge instead of lambda maps (much faster for large datasets)
+                    results_df = pd.DataFrame(results)
+                    results_df = results_df.rename(columns={"token": token_column})
 
-                    annotated["confidence"] = (
-                        annotated[token_column]
-                        .astype(str)
-                        .map(lambda x: pred_map.get(x.strip(), {}).get("confidence"))
-                    )
-
-                    annotated["passes_threshold"] = (
-                        annotated[token_column]
-                        .astype(str)
-                        .map(
-                            lambda x: pred_map.get(x.strip(), {}).get(
-                                "passes_threshold"
-                            )
-                        )
-                    )
-
-                    annotated["final_label"] = (
-                        annotated[token_column]
-                        .astype(str)
-                        .map(lambda x: pred_map.get(x.strip(), {}).get("final_label"))
+                    # Merge on token column
+                    annotated = annotated.merge(
+                        results_df[
+                            [
+                                token_column,
+                                "predicted_label",
+                                "predicted_label_id",
+                                "confidence",
+                                "passes_threshold",
+                                "final_label",
+                            ]
+                        ],
+                        on=token_column,
+                        how="left",
                     )
 
                     annotated.to_csv(output_path, index=False)
