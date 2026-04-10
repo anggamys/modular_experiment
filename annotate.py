@@ -461,17 +461,20 @@ def main():
                     f"{status} {row['token']} -> {row['final_label']} (pred={row['predicted_label']}, conf={row['confidence']:.4f})",
                 )
 
-        # Determine output path: default to CSV in logs/annotations/ if not specified
-        if args.output:
-            output_path = Path(args.output)
-        else:
-            # Default: save to logs/annotations/{exp_id}_annotations.csv
-            output_path = Path("logs/annotations") / f"{args.exp_id}_annotations.csv"
+        # Only save to CSV if input is CSV file
+        if has_csv_arg:
+            # Determine output path: default to CSV in logs/annotations/ if not specified
+            if args.output:
+                output_path = Path(args.output)
+            else:
+                # Default: save to logs/annotations/{exp_id}_annotations.csv
+                output_path = (
+                    Path("logs/annotations") / f"{args.exp_id}_annotations.csv"
+                )
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Always save as CSV (default format)
-        if output_path.suffix.lower() == ".csv" or True:
+            # Save as CSV
             if source_rows is not None:
                 annotated = source_rows.copy()
                 token_column = args.token_column
@@ -500,7 +503,7 @@ def main():
             else:
                 pd.DataFrame(results).to_csv(output_path, index=False)
 
-        utils.log("Annotate", LogType.INFO, f"Saved output: {output_path}")
+            utils.log("Annotate", LogType.INFO, f"Saved output: {output_path}")
 
     except Exception as error:
         utils.log("Annotate", LogType.ERROR, f"Annotation failed: {error}")
