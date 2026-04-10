@@ -19,7 +19,12 @@ class HuggingFace:
     def __init__(self):
         self.utils = Utils()
 
-        token = userdata.get("HF_TOKEN", None)
+        token = None
+        try:
+            token = userdata.get("HF_TOKEN")
+        except Exception:
+            pass
+
         if token:
             self.utils.log(
                 "HuggingFace",
