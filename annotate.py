@@ -15,8 +15,10 @@ from utils import Utils
 def _select_checkpoint_path(checkpoint_dir: Path, checkpoint_name: str | None) -> Path:
     if checkpoint_name:
         candidate = checkpoint_dir / checkpoint_name
+
         if not candidate.exists():
             raise FileNotFoundError(f"Checkpoint not found: {candidate}")
+
         return candidate
 
     best = checkpoint_dir / "best_model.pt"
@@ -48,6 +50,7 @@ def _build_token_batch(token: str, tokenizer, max_length: int) -> dict:
 
 def _build_char_batch(token: str, char_vocab: dict, char_max_length: int) -> dict:
     char_ids, char_mask = CharVocab.encode(token, char_vocab, char_max_length)
+
     return {
         "char_ids": char_ids.unsqueeze(0),
         "char_mask": char_mask.unsqueeze(0),
@@ -127,6 +130,7 @@ def annotate_tokens(
     config_path: str,
     exp_id: str,
     checkpoint_name: str | None = None,
+    confidence_threshold: float = 0.0,
 ):
     assets = _prepare_model_and_assets(config_path, exp_id, checkpoint_name)
     trainer = assets["trainer"]
@@ -155,11 +159,14 @@ def annotate_tokens(
                 "bert_cnn",
             }:
                 batch.update(_build_token_batch(token, tokenizer, max_length))
+
             elif architecture in {"char_cnn", "char_bilstm", "char_cnn_bilstm"}:
                 batch.update(_build_char_batch(token, char_vocab, char_max_length))
+
             elif architecture == "hybrid_bert_charcnn":
                 batch.update(_build_token_batch(token, tokenizer, max_length))
                 batch.update(_build_char_batch(token, char_vocab, char_max_length))
+
             else:
                 raise RuntimeError(
                     f"Unsupported architecture for annotation: {architecture}"
@@ -182,12 +189,18 @@ def annotate_tokens(
             confidence = float(probs[0, pred_idx].item())
             label = id2label.get(pred_idx, str(pred_idx))
 
+            # Determine final label based on confidence threshold
+            is_confident = confidence >= confidence_threshold
+            final_label = label if is_confident else "UNID"
+
             outputs.append(
                 {
                     "token": token,
                     "predicted_label": label,
                     "predicted_label_id": pred_idx,
                     "confidence": confidence,
+                    "passes_threshold": is_confident,
+                    "final_label": final_label,
                 }
             )
 
@@ -238,6 +251,13 @@ def main():
                 "required": False,
             },
             {
+                "name": "--confidence_threshold",
+                "help": "Confidence threshold (0.0-1.0) for accepting predictions. Below this = UNID (default: 0.0)",
+                "type": float,
+                "default": 0.0,
+                "required": False,
+            },
+            {
                 "name": "--output",
                 "help": "Optional JSON output file path",
                 "type": str,
@@ -245,6 +265,16 @@ def main():
             },
         ],
     )
+
+    # Validate confidence threshold
+    confidence_threshold = float(args.confidence_threshold)
+    if not (0.0 <= confidence_threshold <= 1.0):
+        utils.log(
+            "Annotate",
+            LogType.ERROR,
+            f"Confidence threshold must be between 0.0 and 1.0, got {confidence_threshold}",
+        )
+        return
 
     has_tokens_arg = bool(args.tokens and str(args.tokens).strip())
     has_csv_arg = bool(args.input_csv and str(args.input_csv).strip())
@@ -255,6 +285,7 @@ def main():
             LogType.ERROR,
             "Provide either --tokens or --input_csv.",
         )
+
         return
 
     if has_tokens_arg and has_csv_arg:
@@ -263,6 +294,7 @@ def main():
             LogType.ERROR,
             "Use only one input source: --tokens or --input_csv.",
         )
+
         return
 
     source_rows = None
@@ -274,12 +306,14 @@ def main():
 
         df = pd.read_csv(csv_path)
         token_column = args.token_column
+
         if token_column not in df.columns:
             utils.log(
                 "Annotate",
                 LogType.ERROR,
                 f"Column '{token_column}' not found in CSV. Available columns: {list(df.columns)}",
             )
+
             return
 
         source_rows = df.copy()
@@ -297,15 +331,22 @@ def main():
             config_path=args.config,
             exp_id=args.exp_id,
             checkpoint_name=args.checkpoint_name,
+            confidence_threshold=confidence_threshold,
         )
 
         utils.log("Annotate", LogType.INFO, f"Using checkpoint: {checkpoint_path}")
+        utils.log(
+            "Annotate",
+            LogType.INFO,
+            f"Confidence threshold: {confidence_threshold:.4f}",
+        )
 
         for row in results:
+            status = "✓" if row["passes_threshold"] else "✗"
             utils.log(
                 "Annotate",
                 LogType.INFO,
-                f"{row['token']} -> {row['predicted_label']} (conf={row['confidence']:.4f})",
+                f"{status} {row['token']} -> {row['final_label']} (pred={row['predicted_label']}, conf={row['confidence']:.4f})",
             )
 
         if args.output:
@@ -324,6 +365,7 @@ def main():
                             lambda x: pred_map.get(x.strip(), {}).get("predicted_label")
                         )
                     )
+
                     annotated["predicted_label_id"] = (
                         annotated[token_column]
                         .astype(str)
@@ -333,14 +375,33 @@ def main():
                             )
                         )
                     )
+
                     annotated["confidence"] = (
                         annotated[token_column]
                         .astype(str)
                         .map(lambda x: pred_map.get(x.strip(), {}).get("confidence"))
                     )
+
+                    annotated["passes_threshold"] = (
+                        annotated[token_column]
+                        .astype(str)
+                        .map(
+                            lambda x: pred_map.get(x.strip(), {}).get(
+                                "passes_threshold"
+                            )
+                        )
+                    )
+
+                    annotated["final_label"] = (
+                        annotated[token_column]
+                        .astype(str)
+                        .map(lambda x: pred_map.get(x.strip(), {}).get("final_label"))
+                    )
+
                     annotated.to_csv(output_path, index=False)
                 else:
                     pd.DataFrame(results).to_csv(output_path, index=False)
+
             else:
                 with open(output_path, "w", encoding="utf-8") as f:
                     json.dump(results, f, indent=2, ensure_ascii=False)
@@ -349,6 +410,7 @@ def main():
 
     except Exception as error:
         utils.log("Annotate", LogType.ERROR, f"Annotation failed: {error}")
+
         raise
 
 

@@ -7,5 +7,6 @@ hugging_face
 checkpoints
 logs
 
-# Refactoring
-REFACTORING_COMPLETE.md
+# Markdown files
+*.md
+!README.md
