@@ -228,7 +228,7 @@ def main():
             {
                 "name": "--tokens",
                 "help": "Input token(s), separated by spaces",
-                "type": str,
+                "nargs": "+",
                 "required": False,
             },
             {
@@ -276,7 +276,7 @@ def main():
         )
         return
 
-    has_tokens_arg = bool(args.tokens and str(args.tokens).strip())
+    has_tokens_arg = bool(args.tokens and len(args.tokens) > 0)
     has_csv_arg = bool(args.input_csv and str(args.input_csv).strip())
 
     if not has_tokens_arg and not has_csv_arg:
@@ -319,7 +319,7 @@ def main():
         source_rows = df.copy()
         tokens = df[token_column].astype(str).map(str.strip).tolist()
     else:
-        tokens = [token for token in args.tokens.split() if token.strip()]
+        tokens = [str(token).strip() for token in args.tokens if str(token).strip()]
 
     if len(tokens) == 0:
         utils.log("Annotate", LogType.ERROR, "No valid tokens found to annotate.")
