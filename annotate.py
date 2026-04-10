@@ -14,6 +14,15 @@ from utils import Utils
 
 def _select_checkpoint_path(checkpoint_dir: Path, checkpoint_name: str | None) -> Path:
     if checkpoint_name:
+        candidate = Path(checkpoint_name)
+
+        # If checkpoint_name is absolute path, use as-is
+        if candidate.is_absolute():
+            if not candidate.exists():
+                raise FileNotFoundError(f"Checkpoint not found: {candidate}")
+            return candidate
+
+        # Otherwise, treat as relative to checkpoint_dir
         candidate = checkpoint_dir / checkpoint_name
 
         if not candidate.exists():
@@ -110,7 +119,7 @@ def _prepare_model_and_assets(
         char_vocab_size=len(char_vocab) if isinstance(char_vocab, dict) else None,
     )
 
-    model.load_state_dict(payload["model_state_dict"])
+    model.load_state_dict(payload["model_state_dict"], strict=False)
     model.to(trainer.device)
     model.eval()
 

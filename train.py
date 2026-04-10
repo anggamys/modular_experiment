@@ -475,7 +475,7 @@ class Trainer:
         )
 
         # Load state dict
-        model.load_state_dict(checkpoint["model_state_dict"])
+        model.load_state_dict(checkpoint["model_state_dict"], strict=False)
         model.to(self.device)
         model.eval()
 
